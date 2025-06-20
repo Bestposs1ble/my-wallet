@@ -7,11 +7,124 @@
     <meta name="theme-color" content="#000000" />
     <meta
       name="description"
-      content="MetaMask 克隆钱包 - 以太坊Web3钱包实现"
+      content="BestPossible 钱包 - 以太坊Web3钱包实现"
     />
     <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
     <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
-    <title>MetaMask 克隆钱包</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 配置Tailwind主题 -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: {
+                50: '#f5f8ff',
+                100: '#edf2ff',
+                200: '#d6e0ff',
+                300: '#a8c0ff',
+                400: '#7a9bff',
+                500: '#4d74ff',
+                600: '#3354f2',
+                700: '#2a43d9',
+                800: '#2333ad',
+                900: '#1f2d8a'
+              },
+              secondary: {
+                50: '#fff8f5',
+                100: '#fff0e8',
+                200: '#ffd9c2',
+                300: '#ffc39a',
+                400: '#ffaa73',
+                500: '#ff914a',
+                600: '#ff7b21',
+                700: '#e76500',
+                800: '#b65000',
+                900: '#904000'
+              },
+              dark: {
+                700: '#1f2937',
+                800: '#111827',
+                900: '#0a0c14'
+              }
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              display: ['Poppins', 'sans-serif']
+            },
+            boxShadow: {
+              'glass': '0 4px 30px rgba(0, 0, 0, 0.1)',
+              'glass-lg': '0 8px 40px rgba(0, 0, 0, 0.12)'
+            },
+            backdropBlur: {
+              'glass': '10px'
+            }
+          }
+        }
+      }
+    </script>
+    
+    <!-- 预加载字体 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- 添加全局样式 -->
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #f9fafb;
+      }
+      
+      /* 玻璃拟态效果基础类 */
+      .glass-effect {
+        background: rgba(255, 255, 255, 0.65);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.08);
+      }
+      
+      /* 隐藏滚动条但保持功能 */
+      .hide-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      
+      .hide-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      
+      /* 确保没有水平滚动条 */
+      html, body, #root {
+        max-width: 100vw;
+        overflow-x: hidden;
+      }
+      
+      /* 漂亮的渐变背景 */
+      .bg-gradient-primary {
+        background: linear-gradient(135deg, #4d74ff 0%, #3354f2 100%);
+      }
+      
+      .bg-gradient-secondary {
+        background: linear-gradient(135deg, #ff914a 0%, #ff7b21 100%);
+      }
+      
+      /* 动画效果 */
+      .hover-up {
+        transition: all 0.3s ease;
+      }
+      
+      .hover-up:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 10px 20px rgba(0, 0, 0, 0.08);
+      }
+    </style>
+    
+    <title>BestPossible 钱包</title>
   </head>
   <body>
     <noscript>您需要启用JavaScript才能运行此应用。</noscript>

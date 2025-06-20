@@ -1,4 +1,5 @@
 import { encryptData, decryptData } from '../utils/ethersHelper';
+import { set, get } from 'idb-keyval';
 
 // 本地存储键名
 const KEYS = {
@@ -53,29 +54,59 @@ const getWallets = (password) => {
 };
 
 /**
- * 保存主助记词
+ * 使用IndexedDB加密存储钱包
+ * @param {Array} wallets 钱包列表
+ * @param {string} password 加密密码
+ */
+const saveWalletsToDB = async (wallets, password) => {
+  if (!password) {
+    throw new Error('需要密码才能保存钱包');
+  }
+  const encryptedData = encryptData(wallets, password);
+  await set(KEYS.WALLETS, encryptedData);
+};
+
+/**
+ * 从IndexedDB读取并解密钱包
+ * @param {string} password 解密密码
+ * @returns {Array} 钱包列表
+ */
+const getWalletsFromDB = async (password) => {
+  const encryptedData = await get(KEYS.WALLETS);
+  if (!encryptedData) {
+    return [];
+  }
+  try {
+    return decryptData(encryptedData, password);
+  } catch (error) {
+    console.error('获取钱包失败:', error);
+    throw new Error('无法解密钱包数据');
+  }
+};
+
+/**
+ * 使用IndexedDB加密存储主助记词
  * @param {string} mnemonic 助记词
  * @param {string} password 加密密码
  */
-const saveMasterMnemonic = (mnemonic, password) => {
+const saveMasterMnemonicToDB = async (mnemonic, password) => {
   if (!mnemonic || !password) {
     throw new Error('需要助记词和密码才能保存');
   }
   const encryptedData = encryptData(mnemonic, password);
-  localStorage.setItem(KEYS.MASTER_MNEMONIC, encryptedData);
+  await set(KEYS.MASTER_MNEMONIC, encryptedData);
 };
 
 /**
- * 获取主助记词
+ * 从IndexedDB读取并解密主助记词
  * @param {string} password 解密密码
- * @returns {string} 解密后的助记词
+ * @returns {string|null} 解密后的助记词
  */
-const getMasterMnemonic = (password) => {
-  const encryptedData = localStorage.getItem(KEYS.MASTER_MNEMONIC);
+const getMasterMnemonicFromDB = async (password) => {
+  const encryptedData = await get(KEYS.MASTER_MNEMONIC);
   if (!encryptedData) {
     return null;
   }
-  
   try {
     return decryptData(encryptedData, password);
   } catch (error) {
@@ -269,8 +300,15 @@ const getDefaultNetworks = () => {
     },
     localhost: {
       name: '本地网络',
-      url: 'http://localhost:8545',
-      chainId: 1337,
+      url: 'http://127.0.0.1:7545',  // Ganache默认端口是7545
+      chainId: 1337,  // Ganache默认chainId
+      symbol: 'ETH',
+      blockExplorer: ''
+    },
+    ganache: {
+      name: 'Ganache',
+      url: 'http://127.0.0.1:7545',  // Ganache默认端口
+      chainId: 1337,  // Ganache默认chainId
       symbol: 'ETH',
       blockExplorer: ''
     }
@@ -298,17 +336,42 @@ const getDefaultSettings = () => {
 /**
  * 清除所有数据
  */
-const clearAllData = () => {
+const clearAllData = async () => {
+  // 清除localStorage中的数据
   Object.values(KEYS).forEach(key => {
     localStorage.removeItem(key);
   });
   
-  // 清除所有带前缀的数据
+  // 清除所有带前缀的localStorage数据
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (key && (key.startsWith(KEYS.TOKENS) || key.startsWith(KEYS.TX_HISTORY))) {
       localStorage.removeItem(key);
     }
+  }
+  
+  // 清除IndexedDB中的数据
+  try {
+    await set(KEYS.WALLETS, null);
+    await set(KEYS.MASTER_MNEMONIC, null);
+    console.log('已清除IndexedDB中的钱包数据');
+  } catch (error) {
+    console.error('清除IndexedDB数据失败:', error);
+  }
+};
+
+/**
+ * 检查IndexedDB中是否有加密钱包数据
+ * @returns {Promise<boolean>} 是否有钱包
+ */
+const hasWalletsInDB = async () => {
+  try {
+    const encryptedData = await get(KEYS.WALLETS);
+    console.log('IndexedDB钱包检查结果:', !!encryptedData);
+    return !!encryptedData;
+  } catch (error) {
+    console.error('检查IndexedDB钱包数据失败:', error);
+    return false;
   }
 };
 
@@ -317,8 +380,10 @@ export {
   hasWallets,
   saveWallets,
   getWallets,
-  saveMasterMnemonic,
-  getMasterMnemonic,
+  saveWalletsToDB,
+  getWalletsFromDB,
+  saveMasterMnemonicToDB,
+  getMasterMnemonicFromDB,
   saveCurrentWalletIndex,
   getCurrentWalletIndex,
   saveNetworks,
@@ -335,5 +400,6 @@ export {
   updateTransactionStatus,
   getDefaultNetworks,
   getDefaultSettings,
-  clearAllData
+  clearAllData,
+  hasWalletsInDB
 }; 

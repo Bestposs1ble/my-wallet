@@ -316,4 +316,19 @@ export const isValidAddress = (address) => {
   } catch {
     return false;
   }
+};
+
+/**
+ * 缩短地址显示
+ * @param {string} address 钱包地址
+ * @param {number} frontChars 前面保留的字符数，默认为6
+ * @param {number} endChars 后面保留的字符数，默认为4
+ * @returns {string} 缩短后的地址
+ */
+export const shortenAddress = (address, frontChars = 6, endChars = 4) => {
+  if (!address) return '';
+  if (!isValidAddress(address)) return address;
+  if (address.length <= frontChars + endChars) return address;
+  
+  return `${address.slice(0, frontChars)}...${address.slice(-endChars)}`;
 }; 

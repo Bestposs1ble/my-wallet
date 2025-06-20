@@ -51,8 +51,21 @@ const updateProvider = (networkId) => {
     throw new Error(`未找到网络配置: ${networkId}`);
   }
   
-  provider = ethersHelper.createProvider(network.url, network.chainId);
-  return provider;
+  console.log(`更新网络提供者: ${networkId}, URL=${network.url}, chainId=${network.chainId}`);
+  
+  try {
+    provider = ethersHelper.createProvider(network.url, network.chainId);
+    
+    // 测试网络连接
+    provider.getNetwork()
+      .then(network => console.log(`成功连接到网络: ${network.name} (${network.chainId})`))
+      .catch(err => console.error('网络连接测试失败:', err));
+      
+    return provider;
+  } catch (error) {
+    console.error(`创建提供者失败: ${error.message}`);
+    throw error;
+  }
 };
 
 /**
@@ -61,13 +74,40 @@ const updateProvider = (networkId) => {
  * @returns {Promise<string>} ETH余额(以太为单位)
  */
 const getEthBalance = async (address) => {
-  try {
-    const currentProvider = getProvider();
-    return await ethersHelper.getBalance(currentProvider, address);
-  } catch (error) {
-    console.error('获取ETH余额失败:', error);
-    throw error;
+  let attempts = 0;
+  const maxAttempts = 3;
+  
+  while (attempts < maxAttempts) {
+    try {
+      const currentProvider = getProvider();
+      console.log(`使用提供者URL: ${currentProvider.connection?.url || '未知'}`);
+      
+      // 检查网络连接
+      try {
+        const network = await currentProvider.getNetwork();
+        console.log(`当前连接的网络: chainId=${network.chainId}, name=${network.name}`);
+      } catch (networkError) {
+        console.warn(`获取网络信息失败: ${networkError.message}`);
+      }
+      
+      // 获取余额
+      const balance = await ethersHelper.getBalance(currentProvider, address);
+      console.log(`成功获取余额: ${balance} ETH`);
+      return balance;
+    } catch (error) {
+      attempts++;
+      console.error(`获取ETH余额失败(尝试 ${attempts}/${maxAttempts}):`, error);
+      
+      if (attempts >= maxAttempts) {
+        throw error;
+      }
+      
+      // 等待1秒后重试
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
+  
+  throw new Error('获取余额失败: 达到最大重试次数');
 };
 
 /**

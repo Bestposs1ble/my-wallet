@@ -1,8 +1,10 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect, useContext, useRef, useCallback } from 'react';
 import { ethers } from 'ethers';
 import * as ethersHelper from '../utils/ethersHelper';
 import * as storageService from '../services/storageService';
 import * as blockchainService from '../services/blockchainService';
+import { createEthereumProvider, EthereumProvider } from '../services/ethereumProvider';
+import EventEmitter from 'events';
 
 // 创建上下文
 const WalletContext = createContext();
@@ -12,6 +14,7 @@ export const WalletProvider = ({ children }) => {
   // 状态
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLocked, setIsLocked] = useState(true);
+  const [hasWallets, setHasWallets] = useState(false);
   const [wallets, setWallets] = useState([]);
   const [masterMnemonic, setMasterMnemonic] = useState(null); // 主助记词(用于派生多个钱包)
   const [currentWalletIndex, setCurrentWalletIndex] = useState(0);
@@ -24,37 +27,230 @@ export const WalletProvider = ({ children }) => {
   const [lastActivity, setLastActivity] = useState(Date.now()); // 用于自动锁定
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  // 新增dApp相关状态
+  const [dappRequest, setDappRequest] = useState(null);
+  const [requestModalVisible, setRequestModalVisible] = useState(false);
+  const dappRequestHandlers = useRef(new Map());
+  // 用于事件分发的emitter
+  const emitter = useRef(new EventEmitter());
+  // Provider实例
+  const ethereumProviderRef = useRef(null);
 
   // 初始化钱包状态
   useEffect(() => {
     const initWalletState = async () => {
       try {
-        // 加载网络配置
-        const savedNetworks = storageService.getNetworks();
-        const savedCurrentNetwork = storageService.getCurrentNetwork();
+        // 设置加载状态
+        setLoading(true);
         
-        setNetworks(savedNetworks);
-        setCurrentNetwork(savedCurrentNetwork);
+        // 检查是否存在钱包
+        const hasWalletsData = await storageService.hasWalletsInDB();
+        setHasWallets(hasWalletsData);
         
-        // 创建提供者
-        const newProvider = blockchainService.initBlockchainService();
+        // 获取当前网络配置
+        const networksConfig = storageService.getNetworks();
+        setNetworks(networksConfig);
+        
+        // 获取当前网络ID
+        const currentNetworkId = storageService.getCurrentNetwork();
+        setCurrentNetwork(currentNetworkId);
+        
+        // 初始化provider
+        const newProvider = blockchainService.updateProvider(currentNetworkId);
         setProvider(newProvider);
         
-        // 加载设置
-        const settings = storageService.getSettings();
-        
-        // 检查是否有已存储的钱包数据(用于自动跳转到登录页)
-        const hasWallets = storageService.hasWallets();
-        
         setIsInitialized(true);
+        setLoading(false);
       } catch (error) {
         console.error('初始化钱包状态失败:', error);
-        setError('初始化钱包失败，请刷新页面重试');
+        setError('初始化钱包状态失败');
+        setIsInitialized(true); // 即使失败也标记为已初始化
+        setLoading(false);
       }
     };
     
     initWalletState();
   }, []);
+
+  // 初始化以太坊Provider接口
+  useEffect(() => {
+    if (!ethereumProviderRef.current) {
+      const walletContext = {
+        isLocked,
+        getCurrentWallet,
+        currentNetwork,
+        networks,
+        sendTransaction,
+        signMessage: walletSignMessage,
+        addToken,
+        switchNetwork,
+        addCustomNetwork,
+        addListener: (event, handler) => {
+          emitter.current.on(event, handler);
+          return () => emitter.current.off(event, handler);
+        },
+        removeListener: (event, handler) => {
+          emitter.current.off(event, handler);
+        }
+      };
+      
+      // 创建以太坊Provider实例
+      const provider = createEthereumProvider(walletContext);
+      
+      // 替换原生的Provider调用
+      provider._requestUserApproval = handleDappRequest;
+      
+      ethereumProviderRef.current = provider;
+      
+      // 将Provider暴露到window对象，使dApps可以访问
+      if (typeof window !== 'undefined') {
+        window.ethereum = provider;
+      }
+    }
+  }, [isLocked, currentNetwork, networks]);
+
+  // 当钱包或网络变更时，通知Provider
+  useEffect(() => {
+    if (wallets.length > 0 && !isLocked) {
+      const currentWallet = wallets[currentWalletIndex];
+      emitter.current.emit('walletChanged', currentWallet);
+      emitter.current.emit('accountsChanged', [currentWallet.address]);
+    }
+  }, [wallets, currentWalletIndex, isLocked]);
+  
+  useEffect(() => {
+    emitter.current.emit('networkChanged', currentNetwork);
+  }, [currentNetwork]);
+  
+  // 处理来自dApp的请求
+  const handleDappRequest = useCallback((request) => {
+    return new Promise((resolve, reject) => {
+      // 保存请求处理器
+      const requestId = Date.now().toString();
+      dappRequestHandlers.current.set(requestId, { resolve, reject });
+      
+      // 设置请求并显示模态框
+      setDappRequest({ ...request, id: requestId });
+      setRequestModalVisible(true);
+    });
+  }, []);
+  
+  // 批准dApp请求
+  const approveDappRequest = useCallback((requestId) => {
+    const handler = dappRequestHandlers.current.get(requestId);
+    if (handler) {
+      handler.resolve(true);
+      dappRequestHandlers.current.delete(requestId);
+    }
+    setRequestModalVisible(false);
+    setDappRequest(null);
+  }, []);
+  
+  // 拒绝dApp请求
+  const rejectDappRequest = useCallback((requestId) => {
+    const handler = dappRequestHandlers.current.get(requestId);
+    if (handler) {
+      handler.reject(new Error('用户拒绝请求'));
+      dappRequestHandlers.current.delete(requestId);
+    }
+    setRequestModalVisible(false);
+    setDappRequest(null);
+  }, []);
+  
+  // 签名消息
+  const walletSignMessage = async (message) => {
+    if (isLocked || wallets.length === 0 || currentWalletIndex >= wallets.length) {
+      throw new Error('钱包已锁定或无法访问');
+    }
+    
+    try {
+      const currentWallet = wallets[currentWalletIndex];
+      
+      if (!masterMnemonic) {
+        throw new Error('需要助记词才能签名消息');
+      }
+      
+      // 通过主助记词派生当前钱包
+      const wallet = ethersHelper.createWalletFromMnemonic(masterMnemonic, currentWallet.path);
+      
+      // 对消息进行签名
+      return await wallet.signMessage(message);
+    } catch (error) {
+      console.error('签名消息失败:', error);
+      throw new Error(`签名失败: ${error.message}`);
+    }
+  };
+  
+  // 添加代币
+  const addToken = async (tokenInfo) => {
+    try {
+      const { address, symbol, decimals, image } = tokenInfo;
+      
+      // 获取当前网络的代币列表
+      const tokens = storageService.getTokens(currentNetwork);
+      
+      // 检查代币是否已存在
+      const existingToken = tokens.find(
+        t => t.address.toLowerCase() === address.toLowerCase()
+      );
+      
+      if (existingToken) {
+        return true; // 代币已存在
+      }
+      
+      // 添加新代币
+      const newToken = {
+        address,
+        symbol,
+        decimals,
+        image,
+        balance: '0' // 初始余额
+      };
+      
+      const updatedTokens = [...tokens, newToken];
+      storageService.saveTokens(updatedTokens, currentNetwork);
+      
+      return true;
+    } catch (error) {
+      console.error('添加代币失败:', error);
+      return false;
+    }
+  };
+
+  // 初始化时优先从IndexedDB读取钱包
+  useEffect(() => {
+    const tryLoadWallets = async () => {
+      setLoading(true);
+      try {
+        if (password) {
+          // 优先从IndexedDB读取
+          const dbWallets = await storageService.getWalletsFromDB(password);
+          if (dbWallets && dbWallets.length > 0) {
+            setWallets(dbWallets);
+            setIsLocked(false);
+            setError(null);
+            setLoading(false);
+            return;
+          }
+        }
+        // 兼容老数据，从localStorage读取
+        if (password) {
+          const lsWallets = storageService.getWallets(password);
+          if (lsWallets && lsWallets.length > 0) {
+            setWallets(lsWallets);
+            setIsLocked(false);
+            setError(null);
+          }
+        }
+      } catch (e) {
+        setError('读取钱包失败: ' + e.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+    tryLoadWallets();
+    // eslint-disable-next-line
+  }, [password]);
 
   // 监听用户活动，用于自动锁定功能
   useEffect(() => {
@@ -97,13 +293,19 @@ export const WalletProvider = ({ children }) => {
       }
       
       try {
+        console.log(`正在更新余额... 当前网络: ${currentNetwork}`);
         const newBalances = { ...accountBalances };
         let updated = false;
         
         for (const wallet of wallets) {
           try {
+            console.log(`获取地址 ${wallet.address} 的余额`);
+            // 确保使用正确的provider
             const balance = await blockchainService.getEthBalance(wallet.address);
+            console.log(`地址 ${wallet.address} 余额: ${balance}`);
+            
             if (newBalances[wallet.address] !== balance) {
+              console.log(`余额已更新: ${newBalances[wallet.address]} -> ${balance}`);
               newBalances[wallet.address] = balance;
               updated = true;
             }
@@ -113,6 +315,7 @@ export const WalletProvider = ({ children }) => {
         }
         
         if (updated) {
+          console.log('余额更新完成:', newBalances);
           setAccountBalances(newBalances);
         }
       } catch (error) {
@@ -120,34 +323,66 @@ export const WalletProvider = ({ children }) => {
       }
     };
     
+    // 立即获取余额
     fetchBalances();
     
     // 设置定期更新余额的定时器
-    const timer = setInterval(fetchBalances, 30000);
+    const timer = setInterval(fetchBalances, 15000); // 每15秒更新一次
     
     return () => clearInterval(timer);
-  }, [isLocked, wallets, provider, accountBalances]);
+  }, [isLocked, wallets, provider, currentNetwork]); // 添加 currentNetwork 作为依赖
 
   // 解锁钱包
   const unlock = async (inputPassword) => {
     setLoading(true);
     try {
-      const savedWallets = storageService.getWallets(inputPassword);
-      const savedWalletIndex = storageService.getCurrentWalletIndex();
-      const savedMnemonic = storageService.getMasterMnemonic(inputPassword);
-      
+      // 1. 先判断是否有加密钱包数据
+      const hasWallet = await storageService.hasWalletsInDB();
+      if (!hasWallet) {
+        setError('未检测到钱包数据，请先创建钱包');
+        setLoading(false);
+        return false;
+      }
+      // 2. 有加密数据，尝试解密
+      let savedWallets;
+      try {
+        savedWallets = await storageService.getWalletsFromDB(inputPassword);
+      } catch (e) {
+        setError('密码错误');
+        setLoading(false);
+        return false;
+      }
+      // 3. 检查数据结构是否有效
+      if (!Array.isArray(savedWallets) || savedWallets.length === 0 || !savedWallets[0].address) {
+        setError('密码错误');
+        setLoading(false);
+        return false;
+      }
+      // 4. 解密主助记词
+      let mnemonic;
+      try {
+        mnemonic = await storageService.getMasterMnemonicFromDB(inputPassword);
+      } catch (e) {
+        setError('密码错误');
+        setLoading(false);
+        return false;
+      }
+      if (!mnemonic) {
+        setError('主助记词不可用');
+        setLoading(false);
+        return false;
+      }
       setWallets(savedWallets);
-      setCurrentWalletIndex(savedWalletIndex);
-      setMasterMnemonic(savedMnemonic);
+      setCurrentWalletIndex(0); // 可根据需要读取
+      setMasterMnemonic(mnemonic);
       setPassword(inputPassword);
       setIsLocked(false);
       setError(null);
       setLastActivity(Date.now());
-      
       return true;
     } catch (error) {
       console.error('解锁钱包失败:', error);
-      setError('密码错误或钱包数据已损坏');
+      setError('密码错误');
       return false;
     } finally {
       setLoading(false);
@@ -181,23 +416,27 @@ export const WalletProvider = ({ children }) => {
       const pwd = newPassword || password;
       storageService.saveWallets(newWallets, pwd);
       storageService.saveCurrentWalletIndex(0);
-      storageService.saveMasterMnemonic(mnemonic, pwd);
+      // storageService.saveMasterMnemonic(mnemonic, pwd); // localStorage兼容
+      // 新增：保存到IndexedDB
+      await storageService.saveWalletsToDB(newWallets, pwd);
+      await storageService.saveMasterMnemonicToDB(mnemonic, pwd);
       // 更新状态
       setWallets(newWallets);
       setMasterMnemonic(mnemonic);
       setCurrentWalletIndex(0);
+      setHasWallets(true);
       if (newPassword) {
         setPassword(newPassword);
       }
       setIsLocked(false);
       setError(null);
       return {
-        wallet: walletData,
-        mnemonic
+        mnemonic,
+        address: derivedWallet.address
       };
     } catch (error) {
       console.error('创建HD钱包失败:', error);
-      setError('创建HD钱包失败: ' + error.message);
+      setError('创建钱包失败: ' + error.message);
       return null;
     } finally {
       setLoading(false);
@@ -220,31 +459,52 @@ export const WalletProvider = ({ children }) => {
         name,
         address: derivedWallet.address,
         path: "m/44'/60'/0'/0/0",
-        index: 0
+        index: 0,
+        createdAt: new Date().toISOString()
       };
       
-      const newWallets = [walletData];
+      // 检查钱包是否已存在
+      if (wallets.some(w => w.address.toLowerCase() === derivedWallet.address.toLowerCase())) {
+        setError('钱包地址已存在');
+        return null;
+      }
       
-      // 保存钱包数据到本地存储
+      const newWallets = [walletData];
       const pwd = newPassword || password;
+      
+      if (!pwd) {
+        setError('需要密码才能保存钱包');
+        return null;
+      }
+      
+      // 保存到localStorage (兼容)
       storageService.saveWallets(newWallets, pwd);
       storageService.saveCurrentWalletIndex(0);
-      storageService.saveMasterMnemonic(mnemonic, pwd);
+      
+      // 保存到IndexedDB
+      await storageService.saveWalletsToDB(newWallets, pwd);
+      await storageService.saveMasterMnemonicToDB(mnemonic, pwd);
+      
+      // 如果是首次导入，设置密码
+      if (newPassword) {
+        setPassword(newPassword);
+      }
       
       // 更新状态
       setWallets(newWallets);
       setMasterMnemonic(mnemonic);
       setCurrentWalletIndex(0);
-      if (newPassword) {
-        setPassword(newPassword);
-      }
       setIsLocked(false);
+      setHasWallets(true);
       setError(null);
       
-      return walletData;
+      return {
+        mnemonic,
+        address: derivedWallet.address
+      };
     } catch (error) {
       console.error('导入HD钱包失败:', error);
-      setError('导入HD钱包失败: ' + error.message);
+      setError('导入钱包失败: ' + error.message);
       return null;
     } finally {
       setLoading(false);
@@ -252,7 +512,7 @@ export const WalletProvider = ({ children }) => {
   };
   
   // 导入钱包(通过私钥)
-  const importWalletByPrivateKey = async (privateKey, name) => {
+  const importWalletByPrivateKey = async (privateKey, name, newPassword) => {
     setLoading(true);
     try {
       // 从私钥创建钱包
@@ -261,7 +521,8 @@ export const WalletProvider = ({ children }) => {
         name,
         address: wallet.address,
         privateKey: wallet.privateKey,
-        isImported: true
+        isImported: true,
+        createdAt: new Date().toISOString()
       };
       
       // 检查钱包是否已存在
@@ -271,14 +532,30 @@ export const WalletProvider = ({ children }) => {
       }
       
       const newWallets = [...wallets, walletData];
+      const pwd = newPassword || password;
       
-      // 保存到本地存储
-      storageService.saveWallets(newWallets, password);
+      if (!pwd) {
+        setError('需要密码才能保存钱包');
+        return null;
+      }
+      
+      // 保存到本地存储（兼容旧版）
+      storageService.saveWallets(newWallets, pwd);
       storageService.saveCurrentWalletIndex(newWallets.length - 1);
+      
+      // 保存到IndexedDB
+      await storageService.saveWalletsToDB(newWallets, pwd);
+      
+      // 如果是首次导入，设置密码
+      if (newPassword && !password) {
+        setPassword(newPassword);
+      }
       
       // 更新状态
       setWallets(newWallets);
       setCurrentWalletIndex(newWallets.length - 1);
+      setIsLocked(false);
+      setHasWallets(true);
       setError(null);
       
       return walletData;
@@ -560,10 +837,61 @@ export const WalletProvider = ({ children }) => {
     return false;
   };
 
+  // 重置钱包（清除所有钱包数据）
+  const resetWallet = async () => {
+    try {
+      // 设置加载状态
+      setLoading(true);
+      
+      // 清除钱包数据
+      await storageService.clearAllData();
+      
+      // 重置状态
+      setWallets([]);
+      setCurrentWalletIndex(0);
+      setMasterMnemonic(null);
+      setPassword('');
+      setIsLocked(true);
+      setHasWallets(false);
+      setAccountBalances({});
+      setPendingTransactions([]);
+      setError(null);
+      
+      // 结束加载状态
+      setLoading(false);
+      return true;
+    } catch (error) {
+      console.error('重置钱包失败:', error);
+      setError('重置钱包失败: ' + error.message);
+      // 结束加载状态
+      setLoading(false);
+      return false;
+    }
+  };
+
+  // 备份钱包（导出助记词）
+  const backupWallet = async (inputPassword) => {
+    try {
+      // 验证密码
+      if (inputPassword !== password) {
+        setError('密码错误');
+        return null;
+      }
+      
+      // 返回助记词
+      return masterMnemonic;
+    } catch (error) {
+      console.error('备份钱包失败:', error);
+      setError('备份钱包失败: ' + error.message);
+      return null;
+    }
+  };
+
   // 上下文值
   const contextValue = {
     isInitialized,
     isLocked,
+    hasWallets,
     wallets,
     currentWalletIndex,
     currentNetwork,
@@ -579,6 +907,13 @@ export const WalletProvider = ({ children }) => {
     importHDWalletByMnemonic,
     importWalletByPrivateKey,
     addDerivedAccount,
+    // dApp相关
+    dappRequest,
+    requestModalVisible,
+    approveDappRequest,
+    rejectDappRequest,
+    signMessage: walletSignMessage,
+    addToken,
     addMultipleDerivedAccounts,
     switchWallet,
     switchNetwork,
@@ -588,7 +923,9 @@ export const WalletProvider = ({ children }) => {
     getCurrentNetworkConfig,
     getCurrentWalletBalance,
     updateWalletName,
-    deleteWallet
+    deleteWallet,
+    resetWallet,
+    backupWallet
   };
 
   return (
