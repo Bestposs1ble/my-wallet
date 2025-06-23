@@ -54,7 +54,23 @@ export const WalletProvider = ({ children }) => {
     setPassword('');
     setMasterMnemonic(null);
     setError(null);
+    
+    // 清除所有与解锁状态相关的sessionStorage标志
     sessionStorage.removeItem('wallet_is_unlocked');
+    sessionStorage.removeItem('wallet_auto_unlock');
+    sessionStorage.removeItem('walletCreationData');
+    
+    // 清除登录尝试次数
+    localStorage.removeItem('login_attempts');
+    localStorage.removeItem('login_lockout_until');
+    
+    // 清除敏感内存状态
+    setPendingTransactions([]);
+    
+    // 触发事件通知
+    emitter.current.emit('walletLocked');
+    
+    console.log('钱包已锁定');
   };
 
   // 初始化钱包状态
@@ -75,12 +91,35 @@ export const WalletProvider = ({ children }) => {
         setProvider(newProvider);
         setIsInitialized(true);
         setLoading(false);
+        
         // 自动解锁逻辑（对标MetaMask）
         const isUnlocked = sessionStorage.getItem('wallet_is_unlocked');
-        if (isUnlocked === 'true' && hasWalletsData) {
-          // 自动解锁，不需要密码
-          setIsLocked(false);
-          setError(null);
+        if (isUnlocked && hasWalletsData) {
+          try {
+            // 验证解锁标志的有效性
+            const decodedToken = atob(isUnlocked);
+            const [timestamp, addressFragment] = decodedToken.split(':');
+            
+            // 检查时间戳是否在24小时内（防止长时间未使用的解锁状态）
+            const now = Date.now();
+            const tokenTime = parseInt(timestamp, 10);
+            const isValid = now - tokenTime < 24 * 60 * 60 * 1000; // 24小时
+            
+            if (isValid) {
+              // 自动解锁，不需要密码
+              setIsLocked(false);
+              setError(null);
+              console.log('钱包已自动解锁');
+            } else {
+              // 解锁标志过期，清除
+              sessionStorage.removeItem('wallet_is_unlocked');
+              console.log('解锁标志已过期，需要重新登录');
+            }
+          } catch (e) {
+            // 解锁标志无效，清除
+            sessionStorage.removeItem('wallet_is_unlocked');
+            console.error('解锁标志无效:', e);
+          }
         }
       } catch (error) {
         console.error('初始化钱包状态失败:', error);
@@ -454,8 +493,14 @@ export const WalletProvider = ({ children }) => {
       setIsLocked(false);
       setError(null);
       setLastActivity(Date.now());
-      // 解锁成功后，设置 sessionStorage 标志
-      sessionStorage.setItem('wallet_is_unlocked', 'true');
+      
+      // 解锁成功后，设置加密的 sessionStorage 标志
+      const timestamp = Date.now();
+      const unlockToken = `${timestamp}:${savedWallets[0].address.substring(2, 10)}`;
+      // 简单加密，实际生产环境可使用更复杂的加密方式
+      const encodedToken = btoa(unlockToken);
+      sessionStorage.setItem('wallet_is_unlocked', encodedToken);
+      
       return true;
     } catch (error) {
       console.error('解锁钱包失败:', error);
