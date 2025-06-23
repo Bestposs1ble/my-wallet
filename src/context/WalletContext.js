@@ -320,52 +320,53 @@ export const WalletProvider = ({ children }) => {
     // eslint-disable-next-line
   }, [password]);
 
-  // 设置自动锁定计时器
+  // 监控用户活动，实现自动锁定
   useEffect(() => {
-    // 只有在解锁状态且配置了自动锁定时间才设置定时器
+    if (isLocked) return; // 如果已锁定，不需要监控
+    
+    // 获取设置中的自动锁定时间
     const settings = storageService.getSettings();
-    const autoLockTime = settings?.autoLock || 15; // 默认15分钟
-
-    if (!isLocked && autoLockTime > 0) {
-      console.log(`设置自动锁定计时器: ${autoLockTime}分钟`);
-      // 初始化最后活动时间
-      const initialLastActivity = Date.now();
-      setLastActivity(initialLastActivity);
+    const autoLockMinutes = settings.autoLock !== undefined ? settings.autoLock : 15; // 默认15分钟
+    
+    // 如果设置为0，表示不自动锁定
+    if (autoLockMinutes === 0) return;
+    
+    // 计算毫秒数
+    const autoLockTime = autoLockMinutes * 60 * 1000;
+    
+    // 监听用户活动
+    const activityHandler = () => {
+      setLastActivity(Date.now());
+    };
+    
+    // 添加事件监听
+    window.addEventListener('mousemove', activityHandler);
+    window.addEventListener('keypress', activityHandler);
+    window.addEventListener('click', activityHandler);
+    window.addEventListener('touchstart', activityHandler);
+    window.addEventListener('scroll', activityHandler);
+    
+    // 设置定时器，检查是否需要自动锁定
+    const checkInactivityInterval = setInterval(() => {
+      const now = Date.now();
+      const inactiveTime = now - lastActivity;
       
-      // 设置活动监听器
-      const activityHandler = () => {
-        // 使用函数式更新，避免依赖于前一个状态
-        setLastActivity(Date.now());
-      };
-
-      // 添加用户活动事件监听器
-      window.addEventListener('mousedown', activityHandler);
-      window.addEventListener('keydown', activityHandler);
-      window.addEventListener('touchstart', activityHandler);
-      
-      // 设置定时器检查不活动状态
-      const timer = setInterval(() => {
-        const now = Date.now();
-        // 使用闭包中存储的初始值或最新设置的值，不作为useEffect的依赖项
-        const currentLastActivity = lastActivity || initialLastActivity;
-        const inactiveTime = (now - currentLastActivity) / 1000 / 60; // 分钟
-        
-        if (inactiveTime >= autoLockTime) {
-          console.log(`检测到不活动超过${autoLockTime}分钟，自动锁定钱包`);
-          lock();
-        }
-      }, 60000); // 每分钟检查一次
-      
-      // 清理监听器和定时器
-      return () => {
-        window.removeEventListener('mousedown', activityHandler);
-        window.removeEventListener('keydown', activityHandler);
-        window.removeEventListener('touchstart', activityHandler);
-        clearInterval(timer);
-      };
-    }
-  // 只在isLocked状态改变时重新设置，lock函数不再作为依赖项
-  }, [isLocked]);
+      if (inactiveTime > autoLockTime) {
+        console.log(`检测到${autoLockMinutes}分钟无活动，自动锁定钱包`);
+        lock();
+      }
+    }, 30000); // 每30秒检查一次
+    
+    // 清理函数
+    return () => {
+      window.removeEventListener('mousemove', activityHandler);
+      window.removeEventListener('keypress', activityHandler);
+      window.removeEventListener('click', activityHandler);
+      window.removeEventListener('touchstart', activityHandler);
+      window.removeEventListener('scroll', activityHandler);
+      clearInterval(checkInactivityInterval);
+    };
+  }, [isLocked, lastActivity, lock]); // 依赖项中添加lock
 
   // 更新账户余额
   useEffect(() => {

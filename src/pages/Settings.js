@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import {
   LockOutlined,
@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { useWallet } from '../context/WalletContext';
 import { Modal } from 'antd';
+import * as storageService from '../services/storageService';
 
 /**
  * 设置页面
@@ -52,6 +53,15 @@ const Settings = () => {
   const [autoLockTime, setAutoLockTime] = useState(30); // 分钟
   const [error, setError] = useState('');
   const [resetConfirmText, setResetConfirmText] = useState('');
+  
+  // 加载设置
+  useEffect(() => {
+    // 从本地存储加载设置
+    const settings = storageService.getSettings();
+    if (settings && settings.autoLock !== undefined) {
+      setAutoLockTime(settings.autoLock);
+    }
+  }, []);
   
   // 如果钱包已锁定，重定向到登录页面
   if (isLocked) {
@@ -136,7 +146,17 @@ const Settings = () => {
   // 处理自动锁定时间变更
   const handleAutoLockTimeChange = (time) => {
     setAutoLockTime(time);
-    // 这里应该保存设置到钱包上下文或本地存储
+    
+    // 保存设置到本地存储
+    const settings = storageService.getSettings();
+    const updatedSettings = {
+      ...settings,
+      autoLock: time
+    };
+    storageService.saveSettings(updatedSettings);
+    
+    // 显示保存成功提示
+    setError(''); // 清除任何错误
   };
   
   // 创建新钱包
@@ -289,25 +309,23 @@ const Settings = () => {
                   
                   <div className="pt-4">
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      自动锁定时间
-                      <Tooltip title="设置多长时间后自动锁定钱包">
-                        <QuestionCircleOutlined className="ml-1 text-gray-400" />
-                      </Tooltip>
+                      自动锁定时间 <Tooltip title="钱包将在指定时间内无活动后自动锁定"><QuestionCircleOutlined /></Tooltip>
                     </label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {[5, 15, 30, 60, 120, 0].map((time) => (
-                        <button
-                          key={time}
-                          onClick={() => handleAutoLockTimeChange(time)}
-                          className={`py-2 rounded-lg border text-center transition-colors
-                            ${autoLockTime === time 
-                              ? 'border-primary-500 bg-primary-50 text-primary-600' 
-                              : 'border-gray-200 hover:bg-gray-50 text-gray-700'}`}
-                        >
-                          {time === 0 ? '从不' : `${time}分钟`}
-                        </button>
-                      ))}
-                    </div>
+                    <select 
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500"
+                      value={autoLockTime}
+                      onChange={(e) => handleAutoLockTimeChange(parseInt(e.target.value, 10))}
+                    >
+                      <option value={1}>1分钟</option>
+                      <option value={5}>5分钟</option>
+                      <option value={15}>15分钟</option>
+                      <option value={30}>30分钟</option>
+                      <option value={60}>1小时</option>
+                      <option value={0}>从不</option>
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      设置钱包在无活动后自动锁定的时间，提高安全性
+                    </p>
                   </div>
                 </div>
               </div>
