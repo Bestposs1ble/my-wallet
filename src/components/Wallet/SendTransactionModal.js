@@ -9,7 +9,8 @@ import {
   LoadingOutlined,
   WarningOutlined,
   CheckCircleOutlined,
-  DownOutlined
+  DownOutlined,
+  CalculatorOutlined
 } from '@ant-design/icons';
 import TransactionConfirmationModal from './TransactionConfirmationModal';
 
@@ -47,6 +48,9 @@ const SendTransactionModal = ({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [selectedToken, setSelectedToken] = useState(null); // 选择的代币
   const [showTokenList, setShowTokenList] = useState(false); // 控制代币列表显示
+  const [isSending, setIsSending] = useState(false); // 发送防抖状态
+  const [estimatingGas, setEstimatingGas] = useState(false); // Gas估算状态
+  const [revertReason, setRevertReason] = useState(''); // 链上失败原因
   
   // 添加交易确认相关状态
   const [showConfirmation, setShowConfirmation] = useState(false);
@@ -76,6 +80,9 @@ const SendTransactionModal = ({
     setSelectedToken(null);
     setShowConfirmation(false);
     setConfirmationData(null);
+    setIsSending(false);
+    setEstimatingGas(false);
+    setRevertReason('');
   };
 
   // 关闭模态框
@@ -110,7 +117,8 @@ const SendTransactionModal = ({
     if (!recipient || !amount || !addressValid) return;
     
     try {
-      setLoading(true);
+      setEstimatingGas(true);
+      setError('');
       
       let fee;
       if (selectedToken) {
@@ -134,10 +142,15 @@ const SendTransactionModal = ({
       setEstimatedFee(fee.gasFee);
       setGasPrice(ethers.utils.formatUnits(fee.gasPrice, 'gwei'));
       setGasLimit(fee.gasLimit.toString());
+      
+      // 显示成功提示
+      setError('Gas费用估算成功');
+      setTimeout(() => setError(''), 2000);
     } catch (err) {
       console.error('估算Gas费用失败:', err);
+      setError(`估算Gas费用失败: ${err.message}`);
     } finally {
-      setLoading(false);
+      setEstimatingGas(false);
     }
   };
 
@@ -208,14 +221,20 @@ const SendTransactionModal = ({
 
   // 处理发送交易
   const handleSend = async () => {
+    // 防抖：如果已经在发送中，则不重复发送
+    if (isSending) return;
+    
     // 新增gasLimit校验
     if (gasLimit && parseInt(gasLimit, 10) < 21000) {
       setError('Gas Limit 不能小于 21000');
       setShowConfirmation(false);
       return;
     }
+    
+    setIsSending(true); // 设置发送中状态
     setLoading(true);
     setError('');
+    setRevertReason('');
     
     try {
       // 准备交易选项
@@ -249,9 +268,25 @@ const SendTransactionModal = ({
     } catch (err) {
       console.error('发送交易失败:', err);
       setError(`发送交易失败: ${err.message}`);
+      
+      // 尝试解析链上失败原因
+      if (err.data) {
+        try {
+          // 尝试解析revert reason
+          const reason = ethersHelper.parseRevertReason(err.data);
+          if (reason) {
+            setRevertReason(`链上失败原因: ${reason}`);
+          }
+        } catch (parseErr) {
+          console.error('解析失败原因错误:', parseErr);
+        }
+      }
     } finally {
       setLoading(false);
-      setShowConfirmation(false);
+      // 延迟重置发送状态，避免用户快速点击
+      setTimeout(() => {
+        setIsSending(false);
+      }, 2000);
     }
   };
   
@@ -271,229 +306,270 @@ const SendTransactionModal = ({
 
   return (
     <>
-      <div className="fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-50">
-        <div className="glass-effect w-full max-w-md rounded-2xl p-6 shadow-glass-lg">
-          {/* 模态框头部 */}
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="text-xl font-semibold text-dark-800">
-              发送{selectedToken ? ` ${selectedToken.symbol}` : ' ETH'}
-            </h3>
-            <button 
-              onClick={handleClose}
-              className="p-1 rounded-full hover:bg-gray-200 transition-colors"
-            >
-              <CloseOutlined />
-            </button>
-          </div>
+      {/* 主模态框 */}
+      {visible && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black bg-opacity-50" onClick={handleClose}></div>
           
-          {/* 代币选择器 */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              选择代币
-            </label>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowTokenList(!showTokenList)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg flex justify-between items-center"
+          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden">
+            {/* 头部 */}
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+              <h3 className="text-lg font-medium text-gray-900">
+                {selectedToken ? `发送 ${selectedToken.symbol}` : '发送 ETH'}
+              </h3>
+              <button 
+                onClick={handleClose}
+                className="p-1 rounded-full text-gray-400 hover:text-gray-500 focus:outline-none"
               >
-                <div className="flex items-center">
-                  <img 
-                    src={selectedToken 
-                      ? selectedToken.image || `https://ui-avatars.com/api/?name=${selectedToken.symbol}&background=random&color=fff&rounded=true` 
-                      : "https://cryptologos.cc/logos/ethereum-eth-logo.png"} 
-                    alt={selectedToken ? selectedToken.symbol : "ETH"} 
-                    className="w-6 h-6 mr-2"
-                  />
-                  <span>{selectedToken ? selectedToken.symbol : "ETH"}</span>
-                </div>
-                <DownOutlined />
+                <CloseOutlined />
               </button>
-              
-              {showTokenList && (
-                <div className="absolute z-10 mt-1 w-full bg-white rounded-lg border border-gray-200 shadow-lg max-h-60 overflow-y-auto">
-                  {/* ETH选项 */}
-                  <div 
-                    className="px-3 py-2 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
-                    onClick={handleSelectEth}
+            </div>
+            
+            {/* 主体内容 */}
+            <div className="p-6 space-y-4">
+              {/* 代币选择 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  选择代币
+                </label>
+                <div className="relative">
+                  <button
+                    type="button"
+                    className="w-full py-2 px-3 border border-gray-300 rounded-lg flex items-center justify-between bg-white"
+                    onClick={() => setShowTokenList(!showTokenList)}
                   >
                     <div className="flex items-center">
-                      <img src="https://cryptologos.cc/logos/ethereum-eth-logo.png" alt="ETH" className="w-6 h-6 mr-2" />
-                      <span>ETH</span>
+                      {selectedToken ? (
+                        <>
+                          {selectedToken.image && (
+                            <img 
+                              src={selectedToken.image} 
+                              alt={selectedToken.symbol} 
+                              className="w-5 h-5 mr-2 rounded-full"
+                            />
+                          )}
+                          <span>{selectedToken.symbol}</span>
+                        </>
+                      ) : (
+                        <span>ETH</span>
+                      )}
                     </div>
-                    <span>{ethBalance}</span>
-                  </div>
+                    <DownOutlined className="text-xs text-gray-400" />
+                  </button>
                   
-                  {/* 代币列表 */}
-                  {tokens.map((token) => (
-                    <div 
-                      key={token.address}
-                      className="px-3 py-2 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
-                      onClick={() => handleSelectToken(token)}
-                    >
-                      <div className="flex items-center">
-                        <img 
-                          src={token.image || `https://ui-avatars.com/api/?name=${token.symbol}&background=random&color=fff&rounded=true`} 
-                          alt={token.symbol} 
-                          className="w-6 h-6 mr-2" 
-                        />
-                        <span>{token.symbol}</span>
+                  {/* 代币下拉列表 */}
+                  {showTokenList && (
+                    <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-auto">
+                      <div className="p-1">
+                        {/* ETH选项 */}
+                        <button
+                          type="button"
+                          className="w-full px-3 py-2 text-left hover:bg-gray-100 rounded flex items-center"
+                          onClick={handleSelectEth}
+                        >
+                          <span className="mr-2">ETH</span>
+                          <span className="text-xs text-gray-500 ml-auto">
+                            {ethBalance}
+                          </span>
+                        </button>
+                        
+                        {/* 代币列表 */}
+                        {tokens.map(token => (
+                          <button
+                            key={token.address}
+                            type="button"
+                            className="w-full px-3 py-2 text-left hover:bg-gray-100 rounded flex items-center"
+                            onClick={() => handleSelectToken(token)}
+                          >
+                            {token.image && (
+                              <img 
+                                src={token.image} 
+                                alt={token.symbol} 
+                                className="w-5 h-5 mr-2 rounded-full"
+                              />
+                            )}
+                            <span>{token.symbol}</span>
+                            <span className="text-xs text-gray-500 ml-auto">
+                              {getTokenBalance(token.address)}
+                            </span>
+                          </button>
+                        ))}
                       </div>
-                      <span>{getTokenBalance(token.address)}</span>
                     </div>
-                  ))}
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
-          
-          {/* 接收地址 */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              接收地址
-            </label>
-            <input
-              type="text"
-              value={recipient}
-              onChange={(e) => setRecipient(e.target.value)}
-              className={`w-full px-3 py-2 border rounded-lg ${
-                recipient && !addressValid ? 'border-red-500' : 'border-gray-300'
-              } focus:ring-primary-500 focus:border-primary-500`}
-              placeholder="0x..."
-            />
-          </div>
-          
-          {/* 金额 */}
-          <div className="mb-4">
-            <div className="flex justify-between items-center mb-1">
-              <label className="block text-sm font-medium text-gray-700">
-                金额
-              </label>
-              <div className="text-sm text-gray-500">
-                可用余额: {maxAvailable} {selectedToken ? selectedToken.symbol : 'ETH'}
               </div>
-            </div>
-            <div className="relative">
-              <input
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500"
-                placeholder="0.0"
-                min="0"
-                step="0.000001"
-              />
-              <button
-                type="button"
-                onClick={handleMaxAmount}
-                className="absolute right-2 top-1/2 transform -translate-y-1/2 px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 rounded text-gray-700"
-              >
-                最大
-              </button>
-            </div>
-          </div>
-          
-          {/* 高级选项切换 */}
-          <div className="mb-4">
-            <button
-              type="button"
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="text-sm text-primary-600 hover:text-primary-700"
-            >
-              {showAdvanced ? '隐藏高级选项' : '显示高级选项'}
-            </button>
-          </div>
-          
-          {/* 高级选项 */}
-          {showAdvanced && (
-            <div className="mb-4 space-y-4">
+              
+              {/* 收款地址 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Gas价格 (Gwei)
+                  收款地址
                 </label>
                 <input
-                  type="number"
-                  value={gasPrice}
-                  onChange={(e) => setGasPrice(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500"
-                  placeholder="自动"
-                  min="0"
+                  type="text"
+                  className={`w-full py-2 px-3 border rounded-lg ${
+                    recipient && !addressValid ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="输入有效的以太坊地址"
+                  value={recipient}
+                  onChange={(e) => setRecipient(e.target.value)}
                 />
               </div>
               
+              {/* 金额 */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Gas限制
-                </label>
-                <input
-                  type="number"
-                  value={gasLimit}
-                  onChange={(e) => setGasLimit(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-primary-500 focus:border-primary-500"
-                  placeholder="自动"
-                  min="21000"
-                />
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-sm font-medium text-gray-700">
+                    金额
+                  </label>
+                  <button
+                    type="button"
+                    className="text-xs text-blue-600 hover:text-blue-800"
+                    onClick={handleMaxAmount}
+                  >
+                    最大
+                  </button>
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    className="w-full py-2 px-3 border border-gray-300 rounded-lg"
+                    placeholder="0.0"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                  />
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                    <span className="text-gray-500">
+                      {selectedToken ? selectedToken.symbol : 'ETH'}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-1 text-xs text-gray-500 flex justify-between">
+                  <span>可用余额: {maxAvailable} {selectedToken ? selectedToken.symbol : 'ETH'}</span>
+                  <span>≈ $0.00 USD</span>
+                </div>
+              </div>
+              
+              {/* Gas设置 */}
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <button
+                    type="button"
+                    className="text-sm text-gray-700 flex items-center"
+                    onClick={() => setShowAdvanced(!showAdvanced)}
+                  >
+                    高级设置
+                    <span className={`ml-1 transition-transform ${showAdvanced ? 'rotate-180' : ''}`}>
+                      <DownOutlined />
+                    </span>
+                  </button>
+                  
+                  <button
+                    type="button"
+                    className="text-xs bg-blue-50 text-blue-600 py-1 px-2 rounded flex items-center"
+                    onClick={estimateGas}
+                    disabled={estimatingGas || !addressValid || !amount}
+                  >
+                    {estimatingGas ? <LoadingOutlined className="mr-1" /> : <CalculatorOutlined className="mr-1" />}
+                    自动估算Gas
+                  </button>
+                </div>
+                
+                {showAdvanced && (
+                  <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Gas Price (Gwei)
+                      </label>
+                      <input
+                        type="text"
+                        className="w-full py-1.5 px-2 border border-gray-300 rounded"
+                        placeholder="自动"
+                        value={gasPrice}
+                        onChange={(e) => setGasPrice(e.target.value)}
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Gas Limit
+                      </label>
+                      <input
+                        type="text"
+                        className="w-full py-1.5 px-2 border border-gray-300 rounded"
+                        placeholder="21000"
+                        value={gasLimit}
+                        onChange={(e) => setGasLimit(e.target.value)}
+                      />
+                    </div>
+                    
+                    <div className="text-xs text-gray-500">
+                      估算Gas费用: {estimatedFee} ETH
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* 错误提示 */}
+              {error && (
+                <div className="bg-red-50 border border-red-100 text-red-600 p-3 rounded-md flex items-start space-x-2">
+                  <WarningOutlined className="flex-shrink-0 mt-0.5" />
+                  <span className="text-sm">{error}</span>
+                </div>
+              )}
+              
+              {/* 链上失败原因 */}
+              {revertReason && (
+                <div className="bg-yellow-50 border border-yellow-100 text-yellow-800 p-3 rounded-md flex items-start space-x-2">
+                  <WarningOutlined className="flex-shrink-0 mt-0.5" />
+                  <span className="text-sm">{revertReason}</span>
+                </div>
+              )}
+              
+              {/* 成功提示 */}
+              {success && (
+                <div className="bg-green-50 border border-green-100 text-green-600 p-3 rounded-md flex items-start space-x-2">
+                  <CheckCircleOutlined className="flex-shrink-0 mt-0.5" />
+                  <span className="text-sm">交易已提交到网络，请等待确认</span>
+                </div>
+              )}
+              
+              {/* 按钮区域 */}
+              <div className="pt-4">
+                <button
+                  type="button"
+                  className={`w-full py-2.5 px-4 rounded-lg font-medium text-white ${
+                    loading || !addressValid || !amount || isSending
+                      ? 'bg-blue-400 cursor-not-allowed' 
+                      : 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2'
+                  }`}
+                  onClick={handlePrepareTransaction}
+                  disabled={loading || !addressValid || !amount || isSending}
+                >
+                  {loading ? (
+                    <span className="flex items-center justify-center">
+                      <LoadingOutlined className="mr-2" /> 处理中...
+                    </span>
+                  ) : (
+                    '下一步'
+                  )}
+                </button>
               </div>
             </div>
-          )}
-          
-          {/* 估算费用 */}
-          <div className="mb-4 p-3 bg-gray-50 rounded-lg">
-            <div className="flex justify-between text-sm">
-              <span>估算Gas费用:</span>
-              <span>{estimatedFee} ETH</span>
-            </div>
-          </div>
-          
-          {/* 错误提示 */}
-          {error && (
-            <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-lg flex items-start">
-              <WarningOutlined className="mr-2 mt-0.5 flex-shrink-0" />
-              <p>{error}</p>
-            </div>
-          )}
-          
-          {/* 成功提示 */}
-          {success && (
-            <div className="mb-4 p-3 bg-green-50 text-green-600 rounded-lg flex items-start">
-              <CheckCircleOutlined className="mr-2 mt-0.5 flex-shrink-0" />
-              <p>交易已成功广播到网络！</p>
-            </div>
-          )}
-          
-          {/* 操作按钮 */}
-          <div className="mt-6 flex justify-end space-x-3">
-            <button
-              type="button"
-              onClick={handleClose}
-              className="px-4 py-2 border border-gray-300 rounded-lg text-dark-800 hover:bg-gray-50"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              onClick={handlePrepareTransaction}
-              disabled={loading || !addressValid || !amount || parseFloat(amount) <= 0}
-              className={`px-4 py-2 rounded-lg flex items-center ${
-                loading || !addressValid || !amount || parseFloat(amount) <= 0
-                  ? 'bg-gray-300 cursor-not-allowed text-gray-500'
-                  : 'bg-primary-600 hover:bg-primary-700 text-white'
-              }`}
-            >
-              {loading && <LoadingOutlined className="mr-2" />}
-              审核
-            </button>
           </div>
         </div>
-      </div>
+      )}
       
       {/* 交易确认模态框 */}
-      <TransactionConfirmationModal 
-        visible={showConfirmation}
-        onClose={handleCloseConfirmation}
-        onConfirm={handleSend}
-        transactionData={confirmationData}
-      />
+      {showConfirmation && confirmationData && (
+        <TransactionConfirmationModal
+          visible={showConfirmation}
+          onClose={handleCloseConfirmation}
+          onConfirm={handleSend}
+          data={confirmationData}
+          loading={loading || isSending}
+        />
+      )}
     </>
   );
 };
