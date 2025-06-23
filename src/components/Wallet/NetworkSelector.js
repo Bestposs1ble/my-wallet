@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Select, Button, Modal, Form, Input, InputNumber } from 'antd';
+import { Select, Button, Modal, Form, Input, InputNumber, message } from 'antd';
 import PropTypes from 'prop-types';
+import { LoadingOutlined, CheckCircleOutlined } from '@ant-design/icons';
 
 /**
  * 网络选择器组件 - 包含网络选择和添加自定义网络功能
@@ -23,6 +24,11 @@ const NetworkSelector = ({
 }) => {
   const [addNetworkVisible, setAddNetworkVisible] = useState(false);
   const [form] = Form.useForm();
+  const [validatingRpc, setValidatingRpc] = useState(false);
+  const [rpcValid, setRpcValid] = useState(null);
+  const [validatingChainId, setValidatingChainId] = useState(false);
+  const [chainIdValid, setChainIdValid] = useState(null);
+  const [networkLoading, setNetworkLoading] = useState(false);
 
   // 获取网络颜色
   const getNetworkColor = (networkId) => {
@@ -42,10 +48,83 @@ const NetworkSelector = ({
     return colorMap[networkId] || 'bg-gray-500';
   };
 
+  // 校验RPC URL有效性
+  const validateRpcUrl = async (url) => {
+    if (!url) return false;
+    
+    setValidatingRpc(true);
+    setRpcValid(null);
+    
+    try {
+      // 发送JSON-RPC请求验证RPC端点有效性
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'eth_chainId',
+          params: [],
+          id: 1
+        })
+      });
+      
+      const data = await response.json();
+      
+      // 检查是否有有效的结果
+      const isValid = data && data.result && !data.error;
+      setRpcValid(isValid);
+      return isValid;
+    } catch (error) {
+      console.error('RPC URL验证失败:', error);
+      setRpcValid(false);
+      return false;
+    } finally {
+      setValidatingRpc(false);
+    }
+  };
+  
+  // 校验ChainId唯一性
+  const validateChainId = (chainId) => {
+    if (!chainId) return false;
+    
+    setValidatingChainId(true);
+    setChainIdValid(null);
+    
+    // 检查是否已存在相同chainId的网络
+    const existingNetwork = Object.values(networks).find(
+      network => network.chainId === chainId
+    );
+    
+    const isUnique = !existingNetwork;
+    setChainIdValid(isUnique);
+    setValidatingChainId(false);
+    
+    return isUnique;
+  };
+
   // 处理添加自定义网络
   const handleAddNetwork = async () => {
     try {
       const values = await form.validateFields();
+      setNetworkLoading(true);
+      
+      // 验证RPC URL有效性
+      const isRpcValid = await validateRpcUrl(values.rpcUrl);
+      if (!isRpcValid) {
+        message.error('RPC URL无效，请检查URL并确保它是可访问的');
+        setNetworkLoading(false);
+        return;
+      }
+      
+      // 验证ChainId唯一性
+      const isChainIdUnique = validateChainId(values.chainId);
+      if (!isChainIdUnique) {
+        message.error('已存在相同Chain ID的网络，请使用不同的Chain ID');
+        setNetworkLoading(false);
+        return;
+      }
       
       // 创建新网络配置
       const newNetwork = {
@@ -67,8 +146,12 @@ const NetworkSelector = ({
       // 重置表单并关闭模态框
       form.resetFields();
       setAddNetworkVisible(false);
+      message.success(`已成功添加网络: ${values.name}`);
     } catch (error) {
       console.error('添加网络验证失败:', error);
+      message.error('添加网络失败: ' + error.message);
+    } finally {
+      setNetworkLoading(false);
     }
   };
 
@@ -92,7 +175,26 @@ const NetworkSelector = ({
             <Select
               defaultValue={currentNetwork}
               onChange={(value) => {
+                setNetworkLoading(true);
+                // 添加网络切换loading状态
+                message.loading({
+                  content: '正在切换网络...',
+                  key: 'networkSwitch',
+                  duration: 0
+                });
+                
+                // 调用网络切换函数
                 onNetworkChange(value);
+                
+                // 模拟网络切换延迟，实际上页面会刷新
+                setTimeout(() => {
+                  message.success({
+                    content: '网络切换成功',
+                    key: 'networkSwitch',
+                    duration: 2
+                  });
+                  setNetworkLoading(false);
+                }, 1000);
               }}
               style={{ width: '100%' }}
               options={Object.entries(networks).map(([id, network]) => ({
@@ -105,6 +207,8 @@ const NetworkSelector = ({
                   </div>
                 )
               }))}
+              loading={networkLoading}
+              disabled={networkLoading}
             />
           </Form.Item>
         </Form>
@@ -118,6 +222,7 @@ const NetworkSelector = ({
         onOk={handleAddNetwork}
         okText="添加"
         cancelText="取消"
+        confirmLoading={networkLoading}
       >
         <Form
           form={form}
@@ -138,16 +243,43 @@ const NetworkSelector = ({
               { required: true, message: '请输入RPC URL' },
               { type: 'url', message: '请输入有效的URL' }
             ]}
+            extra={
+              rpcValid === true ? (
+                <span className="text-green-500 flex items-center text-xs mt-1">
+                  <CheckCircleOutlined className="mr-1" /> RPC URL 有效
+                </span>
+              ) : rpcValid === false ? (
+                <span className="text-red-500 text-xs mt-1">RPC URL 无效或不可访问</span>
+              ) : null
+            }
           >
-            <Input placeholder="例如: https://nova.arbitrum.io/rpc" />
+            <Input 
+              placeholder="例如: https://nova.arbitrum.io/rpc" 
+              onBlur={(e) => validateRpcUrl(e.target.value)}
+              suffix={validatingRpc ? <LoadingOutlined /> : null}
+            />
           </Form.Item>
           
           <Form.Item
             name="chainId"
             label="链ID"
             rules={[{ required: true, message: '请输入链ID' }]}
+            extra={
+              chainIdValid === true ? (
+                <span className="text-green-500 flex items-center text-xs mt-1">
+                  <CheckCircleOutlined className="mr-1" /> Chain ID 可用
+                </span>
+              ) : chainIdValid === false ? (
+                <span className="text-red-500 text-xs mt-1">已存在相同Chain ID的网络</span>
+              ) : null
+            }
           >
-            <InputNumber placeholder="例如: 42170" style={{ width: '100%' }} />
+            <InputNumber 
+              placeholder="例如: 42170" 
+              style={{ width: '100%' }} 
+              onBlur={(e) => validateChainId(e.target.value)}
+              suffix={validatingChainId ? <LoadingOutlined /> : null}
+            />
           </Form.Item>
           
           <Form.Item
