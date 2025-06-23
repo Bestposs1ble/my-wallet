@@ -8,8 +8,12 @@ import {
   ExportOutlined,
   CheckCircleOutlined, 
   ClockCircleOutlined,
-  ExclamationCircleOutlined
+  ExclamationCircleOutlined,
+  SearchOutlined,
+  InfoCircleOutlined,
+  LoadingOutlined
 } from '@ant-design/icons';
+import { Tooltip, Badge, Spin } from 'antd';
 
 /**
  * 交易列表组件 - 显示交易记录并支持过滤和查看详情
@@ -26,7 +30,7 @@ const TransactionList = ({
   onViewDetails,
   networkExplorerUrl = 'https://etherscan.io/tx/'
 }) => {
-  const [filter, setFilter] = useState('all'); // all, sent, received, swap, pending
+  const [filter, setFilter] = useState('all'); // all, sent, received, swap, pending, failed
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   
   // 交易类型图标映射
@@ -42,6 +46,13 @@ const TransactionList = ({
     confirmed: <CheckCircleOutlined className="text-green-500" />,
     pending: <ClockCircleOutlined className="text-yellow-500" />,
     failed: <ExclamationCircleOutlined className="text-red-500" />
+  };
+  
+  // 状态描述映射
+  const statusText = {
+    confirmed: '已确认',
+    pending: '处理中',
+    failed: '失败'
   };
   
   // 格式化时间戳为相对时间
@@ -62,10 +73,17 @@ const TransactionList = ({
     return txDate.toLocaleDateString();
   };
   
+  // 格式化完整时间
+  const formatFullTime = (timestamp) => {
+    const date = new Date(timestamp);
+    return date.toLocaleString();
+  };
+  
   // 过滤交易
   const filteredTransactions = transactions.filter(tx => {
     if (filter === 'all') return true;
     if (filter === 'pending') return tx.status === 'pending';
+    if (filter === 'failed') return tx.status === 'failed';
     return tx.type === filter;
   });
   
@@ -74,12 +92,24 @@ const TransactionList = ({
     if (!address) return '-';
     return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
   };
+
+  // 获取待处理交易数量
+  const pendingCount = transactions.filter(tx => tx.status === 'pending').length;
   
   return (
     <div className="space-y-4">
       {/* 标题和过滤器 */}
       <div className="flex justify-between items-center">
-        <h3 className="font-semibold text-lg text-dark-800">交易历史</h3>
+        <h3 className="font-semibold text-lg text-dark-800">
+          交易历史
+          {pendingCount > 0 && (
+            <Badge 
+              count={pendingCount} 
+              style={{ backgroundColor: '#faad14', marginLeft: 8 }} 
+              title={`${pendingCount}个待处理交易`}
+            />
+          )}
+        </h3>
         <div className="relative">
           <button
             onClick={() => setShowFilterMenu(!showFilterMenu)}
@@ -91,7 +121,8 @@ const TransactionList = ({
                filter === 'send' ? '转出' : 
                filter === 'receive' ? '转入' : 
                filter === 'swap' ? '兑换' : 
-               filter === 'pending' ? '待处理' : '全部交易'}
+               filter === 'pending' ? '待处理' : 
+               filter === 'failed' ? '失败' : '全部交易'}
             </span>
             <DownOutlined className="text-xs" />
           </button>
@@ -102,10 +133,11 @@ const TransactionList = ({
               <div className="py-1">
                 {[
                   { id: 'all', name: '全部交易' },
+                  { id: 'pending', name: `待处理${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
                   { id: 'send', name: '转出' },
                   { id: 'receive', name: '转入' },
                   { id: 'swap', name: '兑换' },
-                  { id: 'pending', name: '待处理' }
+                  { id: 'failed', name: '失败' }
                 ].map(option => (
                   <button
                     key={option.id}
@@ -127,7 +159,7 @@ const TransactionList = ({
       {/* 交易列表 */}
       {loading ? (
         <div className="flex justify-center items-center py-12">
-          <div className="spinner"></div>
+          <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
         </div>
       ) : filteredTransactions.length > 0 ? (
         <div className="space-y-2">
@@ -146,11 +178,28 @@ const TransactionList = ({
                 {/* 交易内容 */}
                 <div className="flex-1">
                   <div className="flex justify-between">
-                    <span className="font-medium">
-                      {tx.type === 'send' ? '发送' : 
-                       tx.type === 'receive' ? '接收' : 
-                       tx.type === 'swap' ? '兑换' : '合约交互'}
-                    </span>
+                    <div className="flex items-center">
+                      <span className="font-medium">
+                        {tx.type === 'send' ? '发送' : 
+                         tx.type === 'receive' ? '接收' : 
+                         tx.type === 'swap' ? '兑换' : '合约交互'}
+                      </span>
+                      
+                      {/* 交易状态标签 */}
+                      <Tooltip title={tx.error || statusText[tx.status]}>
+                        <span className="ml-2">
+                          {tx.status === 'pending' ? (
+                            <Badge status="processing" text={<span className="text-xs text-yellow-500">处理中</span>} />
+                          ) : tx.status === 'confirmed' ? (
+                            <Badge status="success" text={<span className="text-xs text-green-500">已确认 
+                              {tx.confirmations > 1 ? ` (${tx.confirmations})` : ''}
+                            </span>} />
+                          ) : (
+                            <Badge status="error" text={<span className="text-xs text-red-500">失败</span>} />
+                          )}
+                        </span>
+                      </Tooltip>
+                    </div>
                     <span className={`font-mono font-medium ${tx.type === 'send' ? 'text-orange-500' : 'text-green-500'}`}>
                       {tx.type === 'send' ? '-' : '+'}{tx.amount} {tx.symbol || 'ETH'}
                     </span>
@@ -159,7 +208,6 @@ const TransactionList = ({
                   {/* 交易详情 */}
                   <div className="mt-1 flex justify-between text-xs text-gray-500">
                     <div className="flex items-center space-x-1">
-                      {statusIcons[tx.status]}
                       <span>
                         {tx.type === 'send' ? `发送至 ${formatAddress(tx.to)}` : 
                          tx.type === 'receive' ? `从 ${formatAddress(tx.from)} 接收` : 
@@ -167,25 +215,55 @@ const TransactionList = ({
                          `与合约 ${formatAddress(tx.to)} 交互`}
                       </span>
                     </div>
-                    <span>{formatTimestamp(tx.timestamp)}</span>
+                    <Tooltip title={formatFullTime(tx.timestamp)}>
+                      <span>{formatTimestamp(tx.timestamp)}</span>
+                    </Tooltip>
                   </div>
                 </div>
                 
-                {/* 查看详情箭头 */}
-                <div className="ml-2 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
+                {/* 查看详情按钮 */}
+                <div className="ml-2 text-gray-400 group-hover:text-blue-500 transition-colors">
+                  <Tooltip title="查看详情">
+                    <InfoCircleOutlined />
+                  </Tooltip>
                 </div>
               </div>
               
-              {/* Gas费用 */}
-              {tx.gasUsed && (
-                <div className="mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500 flex justify-between">
-                  <span>Gas费用</span>
-                  <span>{tx.gasUsed} Gwei</span>
+              {/* 交易信息 */}
+              <div className="mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500 grid grid-cols-2 gap-x-2 gap-y-1">
+                {/* Gas费用 */}
+                {(tx.gasPrice || tx.gasLimit) && (
+                  <>
+                    <span>Gas:</span>
+                    <span className="font-medium">{tx.gasPrice || '-'} Gwei</span>
+                  </>
+                )}
+                
+                {/* 区块号 */}
+                {tx.blockNumber && (
+                  <>
+                    <span>区块:</span>
+                    <span className="font-medium">#{tx.blockNumber}</span>
+                  </>
+                )}
+                
+                {/* 交易哈希 */}
+                <span>交易哈希:</span>
+                <div className="flex items-center">
+                  <span className="font-mono font-medium truncate">
+                    {tx.hash.substring(0, 10)}...
+                  </span>
+                  <a 
+                    href={`${networkExplorerUrl}${tx.hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="ml-1 text-blue-500 hover:text-blue-700"
+                  >
+                    <SearchOutlined />
+                  </a>
                 </div>
-              )}
+              </div>
             </div>
           ))}
         </div>
@@ -201,7 +279,9 @@ const TransactionList = ({
               : `没有找到${
                   filter === 'send' ? '转出' : 
                   filter === 'receive' ? '转入' : 
-                  filter === 'swap' ? '兑换' : '待处理'
+                  filter === 'swap' ? '兑换' : 
+                  filter === 'pending' ? '待处理' :
+                  filter === 'failed' ? '失败' : ''
                 }的交易记录`}
           </p>
         </div>
@@ -223,22 +303,6 @@ const TransactionList = ({
           </a>
         </div>
       )}
-      
-      {/* Loading spinner CSS */}
-      <style jsx>{`
-        .spinner {
-          width: 40px;
-          height: 40px;
-          border: 3px solid rgba(0, 0, 0, 0.1);
-          border-radius: 50%;
-          border-top-color: #3b82f6;
-          animation: spin 1s ease-in-out infinite;
-        }
-        
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   );
 };
@@ -247,14 +311,18 @@ TransactionList.propTypes = {
   transactions: PropTypes.arrayOf(
     PropTypes.shape({
       hash: PropTypes.string.isRequired,
-      type: PropTypes.oneOf(['send', 'receive', 'swap', 'contract']),
-      to: PropTypes.string,
       from: PropTypes.string,
+      to: PropTypes.string,
       amount: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
-      symbol: PropTypes.string,
-      status: PropTypes.oneOf(['confirmed', 'pending', 'failed']),
       timestamp: PropTypes.number,
-      gasUsed: PropTypes.oneOfType([PropTypes.string, PropTypes.number])
+      symbol: PropTypes.string,
+      type: PropTypes.oneOf(['send', 'receive', 'swap', 'contract']),
+      status: PropTypes.oneOf(['pending', 'confirmed', 'failed']),
+      confirmations: PropTypes.number,
+      blockNumber: PropTypes.number,
+      gasPrice: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+      gasLimit: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+      error: PropTypes.string
     })
   ),
   loading: PropTypes.bool,

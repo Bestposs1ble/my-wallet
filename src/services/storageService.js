@@ -204,6 +204,106 @@ const getTokens = (networkId) => {
 };
 
 /**
+ * 添加代币到列表
+ * @param {Object} token 代币对象
+ * @param {string} networkId 网络ID
+ * @returns {Array} 更新后的代币列表
+ */
+const addToken = (token, networkId) => {
+  const tokens = getTokens(networkId);
+  // 检查代币是否已存在
+  const existingToken = tokens.find(t => t.address.toLowerCase() === token.address.toLowerCase());
+  if (existingToken) {
+    // 更新现有代币信息
+    const updatedTokens = tokens.map(t => {
+      if (t.address.toLowerCase() === token.address.toLowerCase()) {
+        return { ...t, ...token };
+      }
+      return t;
+    });
+    saveTokens(updatedTokens, networkId);
+    return updatedTokens;
+  } else {
+    // 添加新代币
+    const newTokens = [...tokens, token];
+    saveTokens(newTokens, networkId);
+    return newTokens;
+  }
+};
+
+/**
+ * 移除代币
+ * @param {string} tokenAddress 代币地址
+ * @param {string} networkId 网络ID
+ * @returns {Array} 更新后的代币列表
+ */
+const removeToken = (tokenAddress, networkId) => {
+  const tokens = getTokens(networkId);
+  const updatedTokens = tokens.filter(token => token.address.toLowerCase() !== tokenAddress.toLowerCase());
+  saveTokens(updatedTokens, networkId);
+  return updatedTokens;
+};
+
+/**
+ * 更新代币余额
+ * @param {string} tokenAddress 代币地址
+ * @param {string} balance 代币余额
+ * @param {string} networkId 网络ID
+ * @returns {Array} 更新后的代币列表
+ */
+const updateTokenBalance = (tokenAddress, balance, networkId) => {
+  const tokens = getTokens(networkId);
+  const updatedTokens = tokens.map(token => {
+    if (token.address.toLowerCase() === tokenAddress.toLowerCase()) {
+      return { ...token, balance };
+    }
+    return token;
+  });
+  saveTokens(updatedTokens, networkId);
+  return updatedTokens;
+};
+
+/**
+ * 保存代币交易历史
+ * @param {Array} transactions 交易历史
+ * @param {string} address 钱包地址
+ * @param {string} tokenAddress 代币地址
+ * @param {string} networkId 网络ID
+ */
+const saveTokenTransactionHistory = (transactions, address, tokenAddress, networkId) => {
+  const key = `${KEYS.TX_HISTORY}-token-${tokenAddress.toLowerCase()}-${address.toLowerCase()}-${networkId}`;
+  localStorage.setItem(key, JSON.stringify(transactions));
+};
+
+/**
+ * 获取代币交易历史
+ * @param {string} address 钱包地址
+ * @param {string} tokenAddress 代币地址
+ * @param {string} networkId 网络ID
+ * @returns {Array} 交易历史
+ */
+const getTokenTransactionHistory = (address, tokenAddress, networkId) => {
+  const key = `${KEYS.TX_HISTORY}-token-${tokenAddress.toLowerCase()}-${address.toLowerCase()}-${networkId}`;
+  const history = localStorage.getItem(key);
+  return history ? JSON.parse(history) : [];
+};
+
+/**
+ * 添加代币交易到历史记录
+ * @param {Object} transaction 交易对象
+ * @param {string} address 钱包地址
+ * @param {string} tokenAddress 代币地址
+ * @param {string} networkId 网络ID
+ * @returns {Array} 更新后的交易历史
+ */
+const addTokenTransactionToHistory = (transaction, address, tokenAddress, networkId) => {
+  const history = getTokenTransactionHistory(address, tokenAddress, networkId);
+  const newHistory = [transaction, ...history];
+  saveTokenTransactionHistory(newHistory, address, tokenAddress, networkId);
+  return newHistory;
+};
+
+/**
  * 保存交易历史
  * @param {Array} transactions 交易历史
  * @param {string} address 钱包地址
@@ -265,52 +365,92 @@ const getDefaultNetworks = () => {
   return {
     mainnet: {
       name: '以太坊主网',
-      url: 'https://mainnet.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161',
+      url: 'https://mainnet.infura.io/v3/5c1ee7157d1640e9ae2293e64d167884',
       chainId: 1,
       symbol: 'ETH',
-      blockExplorer: 'https://etherscan.io'
-    },
-    goerli: {
-      name: 'Goerli测试网',
-      url: 'https://goerli.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161',
-      chainId: 5,
-      symbol: 'ETH',
-      blockExplorer: 'https://goerli.etherscan.io'
+      blockExplorer: 'https://etherscan.io',
+      explorerUrl: 'https://etherscan.io'
     },
     sepolia: {
       name: 'Sepolia测试网',
-      url: 'https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161',
+      url: 'https://sepolia.infura.io/v3/5c1ee7157d1640e9ae2293e64d167884',
       chainId: 11155111,
       symbol: 'ETH',
-      blockExplorer: 'https://sepolia.etherscan.io'
+      blockExplorer: 'https://sepolia.etherscan.io',
+      explorerUrl: 'https://sepolia.etherscan.io'
     },
-    bsc: {
-      name: '币安智能链',
-      url: 'https://bsc-dataseed1.binance.org',
-      chainId: 56,
-      symbol: 'BNB',
-      blockExplorer: 'https://bscscan.com'
+    goerli: {
+      name: 'Goerli测试网 (已弃用)',
+      // 将Goerli的URL也指向Sepolia，因为Infura已下线Goerli
+      url: 'https://sepolia.infura.io/v3/5c1ee7157d1640e9ae2293e64d167884',
+      chainId: 5,
+      symbol: 'ETH',
+      blockExplorer: 'https://goerli.etherscan.io',
+      explorerUrl: 'https://goerli.etherscan.io'
     },
     polygon: {
       name: 'Polygon',
-      url: 'https://polygon-rpc.com',
+      url: 'https://polygon-mainnet.infura.io/v3/5c1ee7157d1640e9ae2293e64d167884',
       chainId: 137,
       symbol: 'MATIC',
-      blockExplorer: 'https://polygonscan.com'
+      blockExplorer: 'https://polygonscan.com',
+      explorerUrl: 'https://polygonscan.com'
+    },
+    arbitrum: {
+      name: 'Arbitrum One',
+      url: 'https://arbitrum-mainnet.infura.io/v3/5c1ee7157d1640e9ae2293e64d167884',
+      chainId: 42161,
+      symbol: 'ETH',
+      blockExplorer: 'https://arbiscan.io',
+      explorerUrl: 'https://arbiscan.io'
+    },
+    optimism: {
+      name: 'Optimism',
+      url: 'https://optimism-mainnet.infura.io/v3/5c1ee7157d1640e9ae2293e64d167884',
+      chainId: 10,
+      symbol: 'ETH',
+      blockExplorer: 'https://optimistic.etherscan.io',
+      explorerUrl: 'https://optimistic.etherscan.io'
+    },
+    base: {
+      name: 'Base',
+      url: 'https://base-mainnet.infura.io/v3/5c1ee7157d1640e9ae2293e64d167884',
+      chainId: 8453,
+      symbol: 'ETH',
+      blockExplorer: 'https://basescan.org',
+      explorerUrl: 'https://basescan.org'
+    },
+    avalanche: {
+      name: 'Avalanche C-Chain',
+      url: 'https://avalanche-mainnet.infura.io/v3/5c1ee7157d1640e9ae2293e64d167884',
+      chainId: 43114,
+      symbol: 'AVAX',
+      blockExplorer: 'https://snowtrace.io',
+      explorerUrl: 'https://snowtrace.io'
+    },
+    bsc: {
+      name: '币安智能链',
+      url: 'https://bsc-dataseed.binance.org/', // BSC主网Infura不支持，保持原有
+      chainId: 56,
+      symbol: 'BNB',
+      blockExplorer: 'https://bscscan.com',
+      explorerUrl: 'https://bscscan.com'
     },
     localhost: {
       name: '本地网络',
       url: 'http://127.0.0.1:7545',  // Ganache默认端口是7545
       chainId: 1337,  // Ganache默认chainId
       symbol: 'ETH',
-      blockExplorer: ''
+      blockExplorer: '',
+      explorerUrl: ''
     },
     ganache: {
       name: 'Ganache',
       url: 'http://127.0.0.1:7545',  // Ganache默认端口
       chainId: 1337,  // Ganache默认chainId
       symbol: 'ETH',
-      blockExplorer: ''
+      blockExplorer: '',
+      explorerUrl: ''
     }
   };
 };
@@ -394,6 +534,12 @@ export {
   getSettings,
   saveTokens,
   getTokens,
+  addToken,
+  removeToken,
+  updateTokenBalance,
+  saveTokenTransactionHistory,
+  getTokenTransactionHistory,
+  addTokenTransactionToHistory,
   saveTransactionHistory,
   getTransactionHistory,
   addTransactionToHistory,

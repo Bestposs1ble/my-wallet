@@ -12,6 +12,16 @@ const Login = () => {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   
   useEffect(() => {
+    // 检查是否是新创建的钱包
+    const justCreated = localStorage.getItem('wallet_just_created');
+    if (justCreated === 'true') {
+      // 清除标志
+      localStorage.removeItem('wallet_just_created');
+      // 直接跳转到仪表盘
+      navigate('/dashboard');
+      return;
+    }
+    
     // 如果已经解锁，跳转到仪表板页面
     if (!isLocked) {
       navigate('/dashboard');

@@ -108,6 +108,26 @@ const OnboardingRoute = ({ children }) => {
   return children;
 };
 
+// 创建钱包流程的路由 - 允许在创建过程中访问，即使钱包已创建
+const CreateWalletRoute = ({ children }) => {
+  const { isInitialized } = useWallet();
+  
+  // 如果还在初始化，显示加载中
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="spinner-border text-primary mb-4" />
+          <p className="text-gray-600">正在加载钱包信息...</p>
+        </div>
+      </div>
+    );
+  }
+  
+  // 不检查钱包状态，允许访问创建钱包的所有步骤
+  return children;
+};
+
 // 首页路由 - 根据钱包状态决定重定向
 const HomeRoute = ({ children }) => {
   const { hasWallets, isLocked, isInitialized } = useWallet();
@@ -181,45 +201,45 @@ function AppRoutes() {
           } 
         />
         
-        {/* 创建/导入钱包路由 - 仅在没有钱包时可访问 */}
+        {/* 创建钱包路由 - 允许在创建过程中访问，即使钱包已创建 */}
         <Route 
           path="/create" 
           element={
-            <OnboardingRoute>
+            <CreateWalletRoute>
               <CreateWallet />
-            </OnboardingRoute>
+            </CreateWalletRoute>
           } 
         />
         <Route 
           path="/create/password" 
           element={
-            <OnboardingRoute>
+            <CreateWalletRoute>
               <CreateWallet step="password" />
-            </OnboardingRoute>
+            </CreateWalletRoute>
           } 
         />
         <Route 
           path="/create/backup" 
           element={
-            <OnboardingRoute>
+            <CreateWalletRoute>
               <CreateWallet step="backup" />
-            </OnboardingRoute>
+            </CreateWalletRoute>
           } 
         />
         <Route 
           path="/create/confirm" 
           element={
-            <OnboardingRoute>
+            <CreateWalletRoute>
               <CreateWallet step="confirm" />
-            </OnboardingRoute>
+            </CreateWalletRoute>
           } 
         />
         <Route 
           path="/import" 
           element={
-            <OnboardingRoute>
+            <CreateWalletRoute>
               <ImportWallet />
-            </OnboardingRoute>
+            </CreateWalletRoute>
           } 
         />
         

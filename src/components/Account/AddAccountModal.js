@@ -10,7 +10,7 @@ import { isValidAddress } from '../../utils/ethersHelper';
  * 
  * @param {boolean} visible - 是否显示模态框
  * @param {Function} onCancel - 关闭模态框的回调函数
- * @param {Function} onAdd - 添加账户的回调函数
+ * @param {Function} onSubmit - 添加账户的回调函数
  * @param {boolean} loading - 是否正在加载
  * @param {string} error - 错误信息
  * @returns {JSX.Element}
@@ -18,7 +18,7 @@ import { isValidAddress } from '../../utils/ethersHelper';
 const AddAccountModal = ({ 
   visible = false, 
   onCancel, 
-  onAdd,
+  onSubmit,
   loading = false,
   error = null
 }) => {
@@ -30,7 +30,7 @@ const AddAccountModal = ({
   
   // 提交表单，调用添加账户函数
   const handleSubmit = (values) => {
-    onAdd(values);
+    onSubmit(values);
   };
 
   // 校验私钥有效性
@@ -206,7 +206,7 @@ const AddAccountModal = ({
 AddAccountModal.propTypes = {
   visible: PropTypes.bool.isRequired,
   onCancel: PropTypes.func.isRequired,
-  onAdd: PropTypes.func.isRequired,
+  onSubmit: PropTypes.func.isRequired,
   loading: PropTypes.bool,
   error: PropTypes.string
 };

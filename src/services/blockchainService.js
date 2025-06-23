@@ -241,6 +241,115 @@ const estimateTransactionGas = async (txObject) => {
   }
 };
 
+/**
+ * 获取代币信息
+ * @param {string} tokenAddress 代币合约地址
+ * @returns {Promise<{name: string, symbol: string, decimals: number}>} 代币信息
+ */
+const getTokenInfo = async (tokenAddress) => {
+  try {
+    const currentProvider = getProvider();
+    return await ethersHelper.getTokenInfo(tokenAddress, currentProvider);
+  } catch (error) {
+    console.error('获取代币信息失败:', error);
+    throw error;
+  }
+};
+
+/**
+ * 获取代币余额
+ * @param {string} tokenAddress 代币合约地址
+ * @param {string} walletAddress 钱包地址
+ * @returns {Promise<{balance: string, formatted: string}>} 代币余额
+ */
+const getTokenBalance = async (tokenAddress, walletAddress) => {
+  try {
+    const currentProvider = getProvider();
+    return await ethersHelper.getTokenBalance(tokenAddress, walletAddress, currentProvider);
+  } catch (error) {
+    console.error('获取代币余额失败:', error);
+    throw error;
+  }
+};
+
+/**
+ * 批量获取多个代币余额
+ * @param {Array<{address: string}>} tokens 代币列表
+ * @param {string} walletAddress 钱包地址
+ * @returns {Promise<Object>} 代币余额映射
+ */
+const getMultipleTokenBalances = async (tokens, walletAddress) => {
+  try {
+    const currentProvider = getProvider();
+    return await ethersHelper.getMultipleTokenBalances(tokens, walletAddress, currentProvider);
+  } catch (error) {
+    console.error('批量获取代币余额失败:', error);
+    throw error;
+  }
+};
+
+/**
+ * 发送代币交易
+ * @param {ethers.Wallet} wallet 钱包对象
+ * @param {string} tokenAddress 代币合约地址
+ * @param {string} toAddress 接收地址
+ * @param {string|number} amount 发送数量
+ * @param {object} options 交易选项
+ * @returns {Promise<ethers.providers.TransactionResponse>} 交易响应
+ */
+const sendTokenTransaction = async (wallet, tokenAddress, toAddress, amount, options = {}) => {
+  try {
+    if (!wallet.provider) {
+      const currentProvider = getProvider();
+      wallet = wallet.connect(currentProvider);
+    }
+    
+    return await ethersHelper.sendTokenTransaction(wallet, tokenAddress, toAddress, amount, options);
+  } catch (error) {
+    console.error('发送代币交易失败:', error);
+    throw error;
+  }
+};
+
+/**
+ * 估算代币交易的Gas费用
+ * @param {string} tokenAddress 代币合约地址
+ * @param {string} fromAddress 发送地址
+ * @param {string} toAddress 接收地址
+ * @param {string|number} amount 发送数量
+ * @returns {Promise<{gasFee: string, gasLimit: ethers.BigNumber, gasPrice: ethers.BigNumber}>} Gas信息
+ */
+const estimateTokenTransactionGas = async (tokenAddress, fromAddress, toAddress, amount) => {
+  try {
+    const currentProvider = getProvider();
+    const contract = ethersHelper.createTokenContract(tokenAddress, currentProvider);
+    
+    // 获取代币精度
+    const decimals = await contract.decimals();
+    
+    // 转换为代币最小单位
+    const amountInSmallestUnit = ethers.utils.parseUnits(amount.toString(), decimals);
+    
+    // 估算Gas
+    const gasPrice = await currentProvider.getGasPrice();
+    const gasLimit = await contract.estimateGas.transfer(toAddress, amountInSmallestUnit, { from: fromAddress });
+    
+    // 计算总Gas费用(wei)
+    const gasFeeWei = gasPrice.mul(gasLimit);
+    // 转换为ETH
+    const gasFee = ethers.utils.formatEther(gasFeeWei);
+    
+    return {
+      gasFee,
+      gasLimit,
+      gasPrice
+    };
+  } catch (error) {
+    console.error('估算代币交易Gas费失败:', error);
+    throw error;
+  }
+};
+
 export {
   initBlockchainService,
   getProvider,
@@ -253,5 +362,10 @@ export {
   sendSignedTransaction,
   sendTransaction,
   isValidAddress,
-  estimateTransactionGas
+  estimateTransactionGas,
+  getTokenInfo,
+  getTokenBalance,
+  getMultipleTokenBalances,
+  sendTokenTransaction,
+  estimateTokenTransactionGas
 }; 

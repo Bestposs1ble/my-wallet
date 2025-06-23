@@ -28,7 +28,7 @@ import TermsAgreement from '../components/Wallet/TermsAgreement';
 const CreateWallet = ({ step: routeStep }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { createHDWallet, importHDWalletByMnemonic, importWalletByPrivateKey, error, loading } = useWallet();
+  const { createHDWallet, importHDWalletByMnemonic, importWalletByPrivateKey, unlock, error, loading } = useWallet();
   
   // 本地加载状态
   const [isCreating, setIsCreating] = useState(false);
@@ -59,8 +59,9 @@ const CreateWallet = ({ step: routeStep }) => {
   const [verificationWords, setVerificationWords] = useState([]);
   const [selectedIndices, setSelectedIndices] = useState([]);
 
-  // 从location state中加载助记词等数据
+  // 从location state或sessionStorage中加载助记词等数据
   useEffect(() => {
+    // 首先尝试从location state中获取数据
     if (location.state) {
       const { mnemonic, password, name } = location.state;
       if (mnemonic) {
@@ -70,9 +71,31 @@ const CreateWallet = ({ step: routeStep }) => {
           password: password || prev.password,
           name: name || prev.name
         }));
+        return; // 如果从location state获取到数据，则不再检查sessionStorage
       }
     }
-  }, [location]);
+    
+    // 如果location state中没有数据，则尝试从sessionStorage中获取
+    const savedData = sessionStorage.getItem('walletCreationData');
+    if (savedData) {
+      try {
+        const { mnemonic, password, name } = JSON.parse(savedData);
+        if (mnemonic) {
+          console.log('从sessionStorage恢复钱包创建数据');
+          setWalletData(prev => ({
+            ...prev,
+            mnemonic,
+            password: password || prev.password,
+            name: name || prev.name
+          }));
+          // 使用后立即清除sessionStorage中的数据，避免数据泄露
+          sessionStorage.removeItem('walletCreationData');
+        }
+      } catch (error) {
+        console.error('解析sessionStorage中的数据出错:', error);
+      }
+    }
+  }, []);
 
   // 计算密码强度
   useEffect(() => {
@@ -125,11 +148,22 @@ const CreateWallet = ({ step: routeStep }) => {
 
   // 表单变更处理
   const handleInputChange = (e) => {
-    const { name, value, checked } = e.target;
-    setWalletData({
-      ...walletData,
-      [name]: name.includes('agreed') || name.includes('confirmed') ? checked : value
-    });
+    const { name, value, checked, type } = e.target;
+    console.log('input change:', name, value, checked, type);
+    
+    // 修复复选框状态更新逻辑
+    if (type === 'checkbox') {
+      setWalletData(prev => ({
+        ...prev,
+        [name]: checked
+      }));
+    } else {
+      setWalletData(prev => ({
+        ...prev,
+        [name]: value
+      }));
+    }
+    
     setFormError('');
   };
 
@@ -178,33 +212,51 @@ const CreateWallet = ({ step: routeStep }) => {
     }
     
     setIsCreating(true);
+    console.log('开始创建钱包...');
     
     try {
       // 创建HD钱包
       const result = await createHDWallet(walletData.name, walletData.password);
       
       if (result && result.mnemonic) {
+        console.log('钱包创建成功，准备导航到备份页面');
         // 成功创建，保存助记词，进入下一步
         setWalletData(prev => ({...prev, mnemonic: result.mnemonic}));
-        navigate('/create/backup', { 
-          state: { 
-            mnemonic: result.mnemonic, 
-            password: walletData.password,
-            name: walletData.name
-          }
-        });
+        
+        // 将状态保存到sessionStorage，以便在页面加载后恢复
+        sessionStorage.setItem('walletCreationData', JSON.stringify({
+          mnemonic: result.mnemonic,
+          password: walletData.password,
+          name: walletData.name
+        }));
+        
+        // 直接使用window.location.href进行页面跳转
+        console.log('直接使用window.location.href导航到备份助记词页面');
+        window.location.href = '/create/backup';
       } else {
+        console.error('钱包创建失败，没有返回助记词');
         setFormError('创建钱包失败');
       }
     } catch (err) {
+      console.error('创建钱包出错:', err);
       setFormError(err.message || '创建钱包失败');
     } finally {
       setIsCreating(false);
     }
   };
 
+  // 解锁重试工具函数
+  const tryUnlockWithRetry = async (password, maxTries = 10, delay = 300) => {
+    for (let i = 0; i < maxTries; i++) {
+      const result = await unlock(password);
+      if (result) return true;
+      await new Promise(res => setTimeout(res, delay));
+    }
+    return false;
+  };
+
   // 处理助记词验证
-  const handleVerifyMnemonic = (selectedWords) => {
+  const handleVerifyMnemonic = async (selectedWords) => {
     const mnemonicWords = walletData.mnemonic.split(' ');
     let allCorrect = true;
     
@@ -219,10 +271,18 @@ const CreateWallet = ({ step: routeStep }) => {
     if (allCorrect) {
       setVerificationComplete(true);
       message.success('助记词验证成功！');
-      // 延迟一会儿再导航到仪表板
-      setTimeout(() => {
-        navigate('/dashboard');
-      }, 1000);
+      try {
+        if (walletData.password) {
+          // 自动解锁用，写入sessionStorage
+          sessionStorage.setItem('wallet_auto_unlock', walletData.password);
+          setTimeout(() => {
+            window.location.href = '/dashboard';
+            setTimeout(() => window.location.reload(), 100);
+          }, 1500);
+        }
+      } catch (error) {
+        setFormError('解锁钱包失败，请重新登录');
+      }
     } else {
       setFormError('助记词验证失败，请检查您的选择');
     }
@@ -254,13 +314,16 @@ const CreateWallet = ({ step: routeStep }) => {
         setFormError('请确认已安全备份助记词');
         return;
       }
-      navigate('/create/confirm', { 
-        state: { 
-          mnemonic: walletData.mnemonic,
-          password: walletData.password,
-          name: walletData.name
-        } 
-      });
+      
+      // 将状态保存到sessionStorage，以便在页面加载后恢复
+      sessionStorage.setItem('walletCreationData', JSON.stringify({
+        mnemonic: walletData.mnemonic,
+        password: walletData.password,
+        name: walletData.name
+      }));
+      
+      // 直接使用window.location.href进行页面跳转
+      window.location.href = '/create/confirm';
     }
   };
 
@@ -355,13 +418,17 @@ const CreateWallet = ({ step: routeStep }) => {
         </div>
         
         <div className="pt-2">
-          <Checkbox
-            name="agreedToTerms"
-            checked={walletData.agreedToTerms}
-            onChange={handleInputChange}
-          >
-            我同意 <a href="#" className="text-blue-600 hover:underline">使用条款</a>
-          </Checkbox>
+          {/* 修复复选框实现，确保正确绑定onChange事件 */}
+          <label className="flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              name="agreedToTerms"
+              checked={walletData.agreedToTerms}
+              onChange={handleInputChange}
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+            />
+            <span className="ml-2 text-gray-700">我同意 <a href="#" className="text-blue-600 hover:underline">使用条款</a></span>
+          </label>
         </div>
         
         <div className="bg-blue-50 p-4 rounded-md">
@@ -414,13 +481,17 @@ const CreateWallet = ({ step: routeStep }) => {
         </div>
         
         <div className="pt-2">
-          <Checkbox
-            name="secureBackupConfirmed"
-            checked={walletData.secureBackupConfirmed}
-            onChange={handleInputChange}
-          >
-            我已将助记词安全备份
-          </Checkbox>
+          {/* 修复复选框实现，确保正确绑定onChange事件 */}
+          <label className="flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              name="secureBackupConfirmed"
+              checked={walletData.secureBackupConfirmed}
+              onChange={handleInputChange}
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+            />
+            <span className="ml-2 text-gray-700">我已将助记词安全备份</span>
+          </label>
         </div>
         
         <div className="bg-blue-50 p-4 rounded-md">
@@ -458,9 +529,10 @@ const CreateWallet = ({ step: routeStep }) => {
           <>
             <div className="p-4 border border-gray-300 rounded-lg bg-gray-50">
               <MnemonicVerification 
-                mnemonicWords={walletData.mnemonic ? walletData.mnemonic.split(' ') : []}
-                selectedIndices={selectedIndices}
-                onComplete={handleVerifyMnemonic}
+                mnemonic={walletData.mnemonic || ''}
+                verificationIndexes={selectedIndices}
+                onVerifySuccess={() => handleVerifyMnemonic(selectedIndices.map(idx => walletData.mnemonic.split(' ')[idx]))}
+                onVerifyFail={() => setFormError('助记词验证失败，请检查您的选择')}
               />
             </div>
             

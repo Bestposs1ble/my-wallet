@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
 import PropTypes from 'prop-types';
 import { 
   QuestionCircleOutlined, 
@@ -7,6 +7,8 @@ import {
   WarningOutlined,
   CheckCircleOutlined
 } from '@ant-design/icons';
+import { useWallet } from '../../context/WalletContext';
+import * as blockchainService from '../../services/blockchainService';
 
 /**
  * 添加代币模态框组件
@@ -28,6 +30,7 @@ const AddTokenModal = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [tokenInfo, setTokenInfo] = useState(null);
+  const { provider } = useWallet();
 
   if (!visible) return null;
   
@@ -49,26 +52,21 @@ const AddTokenModal = ({
     setError('');
     
     try {
-      // 这里应该调用实际的合约检测API或web3方法
-      // 目前使用模拟数据
-      setTimeout(() => {
-        // 模拟成功情况
-        if (tokenAddress.length >= 42) {
-          setTokenInfo({
-            name: 'Sample Token',
-            symbol: 'SMPL',
-            decimals: 18,
-          });
-          setTokenName('Sample Token');
-          setTokenSymbol('SMPL');
-          setTokenDecimals('18');
-        } else {
-          setError('无法找到该代币信息，请检查地址是否正确');
-        }
-        setLoading(false);
-      }, 1000);
+      // 调用实际的合约检测API
+      const tokenData = await blockchainService.getTokenInfo(tokenAddress);
+      
+      if (tokenData) {
+        setTokenInfo(tokenData);
+        setTokenName(tokenData.name);
+        setTokenSymbol(tokenData.symbol);
+        setTokenDecimals(tokenData.decimals.toString());
+      } else {
+        setError('无法找到该代币信息，请检查地址是否正确');
+      }
     } catch (err) {
-      setError(err.message || '查询代币信息失败');
+      console.error('获取代币信息失败:', err);
+      setError(err.message || '查询代币信息失败，请确认这是一个有效的ERC20代币合约');
+    } finally {
       setLoading(false);
     }
   };
@@ -96,9 +94,10 @@ const AddTokenModal = ({
     // 提交数据
     onSubmit({
       address: tokenAddress,
-      name: tokenName,
+      name: tokenName || tokenSymbol,
       symbol: tokenSymbol,
       decimals: parseInt(tokenDecimals),
+      image: `https://ui-avatars.com/api/?name=${tokenSymbol}&background=random&color=fff&rounded=true`
     });
   };
 
@@ -159,6 +158,7 @@ const AddTokenModal = ({
               <div>
                 <p className="font-medium">已找到代币信息</p>
                 <p className="text-sm">{tokenInfo.name} ({tokenInfo.symbol})</p>
+                <p className="text-sm">小数位数: {tokenInfo.decimals}</p>
               </div>
             </div>
           )}

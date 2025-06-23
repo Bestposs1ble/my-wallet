@@ -331,4 +331,147 @@ export const shortenAddress = (address, frontChars = 6, endChars = 4) => {
   if (address.length <= frontChars + endChars) return address;
   
   return `${address.slice(0, frontChars)}...${address.slice(-endChars)}`;
+};
+
+/**
+ * ERC20代币标准ABI
+ */
+export const ERC20_ABI = [
+  // 只包含必要的函数
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
+  "function decimals() view returns (uint8)",
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address owner) view returns (uint256)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function transferFrom(address from, address to, uint256 amount) returns (bool)",
+  // 事件
+  "event Transfer(address indexed from, address indexed to, uint256 value)",
+  "event Approval(address indexed owner, address indexed spender, uint256 value)"
+];
+
+/**
+ * 创建ERC20代币合约实例
+ * @param {string} tokenAddress 代币合约地址
+ * @param {ethers.providers.Provider} provider 以太坊提供者
+ * @returns {ethers.Contract} 代币合约实例
+ */
+export const createTokenContract = (tokenAddress, provider) => {
+  return new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+};
+
+/**
+ * 获取ERC20代币信息
+ * @param {string} tokenAddress 代币合约地址
+ * @param {ethers.providers.Provider} provider 以太坊提供者
+ * @returns {Promise<{name: string, symbol: string, decimals: number}>} 代币信息
+ */
+export const getTokenInfo = async (tokenAddress, provider) => {
+  try {
+    const contract = createTokenContract(tokenAddress, provider);
+    
+    // 并行获取所有信息
+    const [name, symbol, decimals] = await Promise.all([
+      contract.name(),
+      contract.symbol(),
+      contract.decimals()
+    ]);
+    
+    return { name, symbol, decimals: Number(decimals) };
+  } catch (error) {
+    console.error('获取代币信息失败:', error);
+    throw new Error(`获取代币信息失败: ${error.message}`);
+  }
+};
+
+/**
+ * 获取ERC20代币余额
+ * @param {string} tokenAddress 代币合约地址
+ * @param {string} walletAddress 钱包地址
+ * @param {ethers.providers.Provider} provider 以太坊提供者
+ * @returns {Promise<{balance: string, formatted: string}>} 代币余额(原始值和格式化值)
+ */
+export const getTokenBalance = async (tokenAddress, walletAddress, provider) => {
+  try {
+    const contract = createTokenContract(tokenAddress, provider);
+    const decimals = await contract.decimals();
+    const balance = await contract.balanceOf(walletAddress);
+    
+    // 格式化余额为可读格式
+    const formatted = ethers.utils.formatUnits(balance, decimals);
+    
+    return {
+      balance: balance.toString(), // 原始余额(大数)
+      formatted // 格式化后的余额
+    };
+  } catch (error) {
+    console.error('获取代币余额失败:', error);
+    throw new Error(`获取代币余额失败: ${error.message}`);
+  }
+};
+
+/**
+ * 发送ERC20代币交易
+ * @param {ethers.Wallet} wallet 已连接provider的钱包对象
+ * @param {string} tokenAddress 代币合约地址
+ * @param {string} toAddress 接收地址
+ * @param {string|number} amount 发送数量(代币单位)
+ * @param {object} options 交易选项
+ * @returns {Promise<ethers.providers.TransactionResponse>} 交易响应
+ */
+export const sendTokenTransaction = async (wallet, tokenAddress, toAddress, amount, options = {}) => {
+  if (!wallet.provider) {
+    throw new Error('钱包未连接到提供者');
+  }
+  
+  try {
+    const contract = createTokenContract(tokenAddress, wallet.provider);
+    const connectedContract = contract.connect(wallet);
+    
+    // 获取代币精度
+    const decimals = await contract.decimals();
+    
+    // 转换为代币最小单位
+    const amountInSmallestUnit = ethers.utils.parseUnits(amount.toString(), decimals);
+    
+    // 准备交易选项
+    const overrides = {};
+    if (options.gasPrice) overrides.gasPrice = options.gasPrice;
+    if (options.gasLimit) overrides.gasLimit = options.gasLimit;
+    if (options.nonce !== undefined) overrides.nonce = options.nonce;
+    
+    // 发送交易
+    const tx = await connectedContract.transfer(toAddress, amountInSmallestUnit, overrides);
+    
+    return tx;
+  } catch (error) {
+    console.error('发送代币交易失败:', error);
+    throw new Error(`发送代币交易失败: ${error.message}`);
+  }
+};
+
+/**
+ * 批量获取多个ERC20代币余额
+ * @param {Array<{address: string}>} tokens 代币列表
+ * @param {string} walletAddress 钱包地址
+ * @param {ethers.providers.Provider} provider 以太坊提供者
+ * @returns {Promise<Object>} 代币余额映射 {tokenAddress: {balance, formatted}}
+ */
+export const getMultipleTokenBalances = async (tokens, walletAddress, provider) => {
+  const balances = {};
+  
+  // 并行获取所有代币余额
+  await Promise.all(tokens.map(async (token) => {
+    try {
+      const result = await getTokenBalance(token.address, walletAddress, provider);
+      balances[token.address] = result;
+    } catch (error) {
+      console.error(`获取代币 ${token.address} 余额失败:`, error);
+      balances[token.address] = { balance: '0', formatted: '0' };
+    }
+  }));
+  
+  return balances;
 }; 

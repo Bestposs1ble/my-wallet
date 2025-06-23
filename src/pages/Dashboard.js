@@ -1,47 +1,51 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Tabs, message, Spin, Badge, Tooltip, Modal } from 'antd';
+import { Tabs, message, Spin, Badge, Tooltip, Modal, Layout, Dropdown, Avatar } from 'antd';
 import {
   WalletOutlined,
   SendOutlined,
-  SwapOutlined,
   AppstoreOutlined,
   SettingOutlined,
   UserOutlined,
-  LogoutOutlined,
-  PlusOutlined,
-  HomeOutlined,
-  HistoryOutlined,
-  DollarOutlined,
+  SwapOutlined,
   LinkOutlined,
   LockOutlined,
-  GlobalOutlined,
-  SecurityScanOutlined,
-  EyeOutlined,
-  EyeInvisibleOutlined,
-  QuestionCircleOutlined,
-  RightOutlined,
-  KeyOutlined,
-  ClockCircleOutlined,
-  DeleteOutlined,
-  WarningOutlined,
   PlusCircleOutlined,
   ImportOutlined,
   ExclamationCircleOutlined,
-  AlertOutlined
+  AlertOutlined,
+  MenuUnfoldOutlined,
+  MenuFoldOutlined,
+  DownOutlined,
+  PlusOutlined,
+  LogoutOutlined,
+  HistoryOutlined,
+  DollarOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
+  QuestionCircleOutlined,
+  SecurityScanOutlined,
+  KeyOutlined,
+  RightOutlined,
+  GlobalOutlined,
+  ClockCircleOutlined,
+  DeleteOutlined,
+  WarningOutlined,
+  HomeOutlined
 } from '@ant-design/icons';
 import { useWallet } from '../context/WalletContext';
-import * as ethersHelper from '../utils/ethersHelper';
-
-// 导入我们创建的组件
-import AccountAvatar from '../components/Account/AccountAvatar';
 import AccountCard from '../components/Account/AccountCard';
-import AddAccountModal from '../components/Account/AddAccountModal';
-import AddressDisplay from '../components/Wallet/AddressDisplay';
-import NetworkSelector from '../components/Wallet/NetworkSelector';
+import AccountAvatar from '../components/Account/AccountAvatar';
 import SendTransactionModal from '../components/Wallet/SendTransactionModal';
 import ReceiveModal from '../components/Wallet/ReceiveModal';
 import TransactionList from '../components/Wallet/TransactionList';
+import TransactionDetailsModal from '../components/Wallet/TransactionDetailsModal';
+import AddAccountModal from '../components/Account/AddAccountModal';
+import NetworkSelector from '../components/Wallet/NetworkSelector';
+import AddressDisplay from '../components/Wallet/AddressDisplay';
+import '../styles/Dashboard.css';
+
+const { Header, Sider, Content } = Layout;
 
 const Dashboard = () => {
   // 从上下文获取钱包状态和方法
@@ -49,24 +53,29 @@ const Dashboard = () => {
     isLocked,
     wallets,
     currentWalletIndex,
-    currentNetwork,
     networks,
+    currentNetwork,
     provider,
     accountBalances,
     pendingTransactions,
     error,
     loading,
     lock,
-    addDerivedAccount,
     switchWallet,
     switchNetwork,
-    getCurrentWallet,
-    getCurrentWalletBalance,
+    addCustomNetwork,
     sendTransaction,
+    getCurrentWallet,
+    getCurrentNetworkConfig,
+    getCurrentWalletBalance,
+    addDerivedAccount,
     importWalletByPrivateKey,
     resetWallet,
     backupWallet
   } = useWallet();
+
+  // 引入storageService
+  const storageService = require('../services/storageService');
 
   // 主要状态
   const [collapsed, setCollapsed] = useState(true);
@@ -88,6 +97,86 @@ const Dashboard = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [autoLockTime, setAutoLockTime] = useState(30);
   const [resetConfirmText, setResetConfirmText] = useState('');
+  
+  // 交易详情相关状态
+  const [selectedTransaction, setSelectedTransaction] = useState(null);
+  const [showTransactionDetails, setShowTransactionDetails] = useState(false);
+
+  // 加载当前账户的交易记录
+  const [accountTransactions, setAccountTransactions] = useState([]);
+  
+  // 当前账户或网络变化时，加载对应的交易记录
+  useEffect(() => {
+    const loadAccountTransactions = () => {
+      const currentWallet = getCurrentWallet();
+      if (!currentWallet) return;
+      
+      // 从本地存储加载交易记录
+      const storedTransactions = storageService.getTransactionHistory(
+        currentWallet.address, 
+        currentNetwork
+      );
+      
+      // 合并待处理交易和存储的交易记录
+      const relevantPendingTxs = pendingTransactions.filter(tx => 
+        tx.from.toLowerCase() === currentWallet.address.toLowerCase() || 
+        tx.to.toLowerCase() === currentWallet.address.toLowerCase()
+      );
+      
+      // 使用Map去重，以交易哈希为键
+      const txMap = new Map();
+      
+      // 先添加待处理交易（可能更新）
+      relevantPendingTxs.forEach(tx => {
+        txMap.set(tx.hash, tx);
+      });
+      
+      // 再添加存储的交易（如果没有相同哈希的待处理交易）
+      storedTransactions.forEach(tx => {
+        if (!txMap.has(tx.hash)) {
+          txMap.set(tx.hash, tx);
+        }
+      });
+      
+      // 转换回数组并按时间戳排序
+      const combinedTransactions = Array.from(txMap.values())
+        .sort((a, b) => b.timestamp - a.timestamp);
+      
+      setAccountTransactions(combinedTransactions);
+    };
+    
+    loadAccountTransactions();
+  }, [currentWalletIndex, currentNetwork, pendingTransactions]);
+
+  // 处理网络切换
+  const handleNetworkChange = (networkId) => {
+    switchNetwork(networkId);
+  };
+  
+  // 处理添加自定义网络
+  const handleAddNetwork = (networkId, networkConfig) => {
+    const result = addCustomNetwork(networkId, networkConfig);
+    if (result) {
+      message.success(`已添加网络: ${networkConfig.name}`);
+      // 自动切换到新添加的网络
+      switchNetwork(networkId);
+    } else {
+      message.error('添加网络失败');
+    }
+  };
+  
+  // 显示网络选择器模态框
+  const [networkSelectorVisible, setNetworkSelectorVisible] = useState(false);
+  
+  // 打开网络选择器
+  const openNetworkSelector = () => {
+    setNetworkSelectorVisible(true);
+  };
+  
+  // 关闭网络选择器
+  const closeNetworkSelector = () => {
+    setNetworkSelectorVisible(false);
+  };
 
   // 如果钱包已锁定，重定向到登录页面
   if (isLocked) {
@@ -108,6 +197,12 @@ const Dashboard = () => {
     setShowReceiveModal(true);
   };
 
+  // 处理查看交易详情
+  const handleViewTransactionDetails = (transaction) => {
+    setSelectedTransaction(transaction);
+    setShowTransactionDetails(true);
+  };
+
   // 提交发送交易表单
   const handleSendSubmit = async (values) => {
     try {
@@ -115,7 +210,12 @@ const Dashboard = () => {
       const result = await sendTransaction(
         values.to, 
         values.amount, 
-        { gasPrice: values.gasPrice }
+        { 
+          gasPrice: values.gasPrice,
+          gasLimit: values.gasLimit
+        },
+        provider,
+        currentWallet?.address || ''
       );
       
       if (result) {
@@ -344,10 +444,42 @@ const Dashboard = () => {
     );
   };
 
+  // 用户菜单项
+  const userMenuItems = [
+    {
+      key: 'account',
+      label: currentWallet ? (
+        <div className="py-1">
+          <div className="font-medium">{currentWallet.name || `账户${currentWalletIndex + 1}`}</div>
+          <AddressDisplay address={currentWallet.address} short={true} showCopyButton={false} />
+        </div>
+      ) : '我的账户'
+    },
+    {
+      key: 'settings',
+      label: '设置',
+      icon: <SettingOutlined />
+    },
+    {
+      key: 'logout',
+      label: '锁定钱包',
+      icon: <LockOutlined />
+    }
+  ];
+
+  // 处理用户菜单点击
+  const handleUserMenuClick = ({ key }) => {
+    if (key === 'logout') {
+      lock();
+    } else if (key === 'settings') {
+      setActiveSection('general');
+      setActiveTab('settings');
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 flex">
-      {/* 侧边导航 - 折叠状态 */}
-      <div className={`fixed h-full z-20 transition-all duration-300 ${collapsed ? 'w-20' : 'w-64'} bg-white shadow-lg`}>
+    <Layout className="min-h-screen">
+      <Sider trigger={null} collapsible collapsed={collapsed} className="bg-gray-800">
         <div className="flex flex-col h-full">
           {/* 顶部Logo */}
           <div className={`p-4 flex ${collapsed ? 'justify-center' : 'justify-between'} items-center border-b border-gray-100`}>
@@ -448,58 +580,47 @@ const Dashboard = () => {
             </div>
           </div>
         </div>
-      </div>
-      
-      {/* 收起/展开按钮 */}
-      {collapsed && (
-        <button
-          onClick={() => setCollapsed(false)}
-          className="fixed left-20 top-5 z-20 bg-white rounded-full w-6 h-6 flex items-center justify-center shadow-md border border-gray-200"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-          </svg>
-        </button>
-      )}
-      
-      {/* 主内容区 */}
-      <div className={`flex-1 transition-all duration-300 ${collapsed ? 'ml-20' : 'ml-64'}`}>
-        {/* 顶部栏 */}
-        <header className="glass-effect sticky top-0 z-10 flex justify-between items-center px-6 py-3">
+      </Sider>
+      <Layout className="site-layout">
+        <Header className="bg-white p-0 flex justify-between items-center border-b border-gray-200">
           <div className="flex items-center">
-            {/* 价格信息 */}
-            <div className="hidden md:flex space-x-2">
-              <Tooltip title="ETH价格">
-                <div className="px-3 py-1.5 bg-white bg-opacity-60 rounded-full flex items-center space-x-1.5">
-                  <Badge color="green" status="processing" />
-                  <span className="text-xs font-medium text-gray-700">ETH: $3,200.45</span>
-                </div>
-              </Tooltip>
-              <Tooltip title="Gas价格">
-                <div className="px-3 py-1.5 bg-white bg-opacity-60 rounded-full flex items-center space-x-1.5">
-                  <Badge color="blue" status="default" />
-                  <span className="text-xs font-medium text-gray-700">Gas: 25 Gwei</span>
-                </div>
-              </Tooltip>
-            </div>
+            {React.createElement(collapsed ? MenuUnfoldOutlined : MenuFoldOutlined, {
+              className: 'trigger text-xl p-4 cursor-pointer',
+              onClick: () => setCollapsed(!collapsed),
+            })}
+            <div className="ml-4 text-lg font-medium">MetaMask 克隆版</div>
           </div>
           
-          {/* 当前账户 */}
-          {currentWallet && (
-            <div className="flex items-center glass-effect py-1 pl-2 pr-4 rounded-full">
-              <AccountAvatar address={currentWallet.address} size={32} />
-              <div className="ml-2 mr-1">
-                <p className="font-medium text-sm leading-none text-dark-800">
-                  {currentWallet.name || `账户${currentWalletIndex + 1}`}
-                </p>
-                <AddressDisplay address={currentWallet.address} short={true} showCopyButton={false} />
-              </div>
+          {/* 网络选择器按钮 */}
+          <div className="flex items-center">
+            <div 
+              className="flex items-center mr-4 px-3 py-1.5 rounded-full cursor-pointer hover:bg-gray-100"
+              onClick={openNetworkSelector}
+            >
+              <div className={`w-2.5 h-2.5 rounded-full mr-2 ${
+                currentNetwork === 'mainnet' ? 'bg-green-500' :
+                currentNetwork === 'sepolia' ? 'bg-purple-500' :
+                currentNetwork === 'goerli' ? 'bg-blue-300' :
+                currentNetwork === 'polygon' ? 'bg-purple-600' :
+                currentNetwork === 'arbitrum' ? 'bg-blue-600' :
+                currentNetwork === 'optimism' ? 'bg-red-500' :
+                currentNetwork === 'base' ? 'bg-blue-400' :
+                currentNetwork === 'avalanche' ? 'bg-red-600' :
+                currentNetwork === 'bsc' ? 'bg-yellow-500' : 'bg-gray-500'
+              }`}></div>
+              <span className="font-medium">{networks[currentNetwork]?.name || '未知网络'}</span>
             </div>
-          )}
-        </header>
+            
+            <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenuClick }} trigger={['click']}>
+              <div className="flex items-center mr-4 cursor-pointer">
+                <Avatar size="small" icon={<UserOutlined />} className="bg-blue-500" />
+                <DownOutlined className="ml-1 text-xs" />
+              </div>
+            </Dropdown>
+          </div>
+        </Header>
         
-        {/* 页面内容 */}
-        <main className="p-6">
+        <Content className="p-6">
           {/* 主账户卡片区 */}
           <section className={activeTab === 'dashboard' ? 'block' : 'hidden'}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -537,8 +658,9 @@ const Dashboard = () => {
                         children: (
                           <div className="px-4 pb-4">
                             <TransactionList 
-                              transactions={pendingTransactions} 
+                              transactions={accountTransactions} 
                               loading={loading}
+                              onViewDetails={handleViewTransactionDetails}
                             />
                           </div>
                         ),
@@ -986,45 +1108,65 @@ const Dashboard = () => {
               </div>
             </div>
           </section>
-        </main>
-      </div>
+        </Content>
+      </Layout>
 
+      {/* 添加网络选择器模态框 */}
+      <NetworkSelector
+        networks={networks}
+        currentNetwork={currentNetwork}
+        onNetworkChange={handleNetworkChange}
+        isModalVisible={networkSelectorVisible}
+        onModalClose={closeNetworkSelector}
+        onAddNetwork={handleAddNetwork}
+      />
+      
       {/* 发送交易模态框 */}
       <SendTransactionModal
         visible={showSendModal}
         onCancel={() => setShowSendModal(false)}
-        onSend={handleSendSubmit}
-        networkSymbol={networkConfig?.symbol || 'ETH'}
-        gasPrice={gasPrice}
+        onSubmit={handleSendSubmit}
+        from={currentWallet?.address || ''}
         balance={currentBalance}
-        loading={loading}
+        provider={provider}
+        networkSymbol={networkConfig?.symbol || 'ETH'}
       />
-
-      {/* 接收交易模态框 */}
+      
+      {/* 接收模态框 */}
       <ReceiveModal
         visible={showReceiveModal}
         onCancel={() => setShowReceiveModal(false)}
         address={currentWallet?.address || ''}
-        name={currentWallet?.name || `账户${currentWalletIndex + 1}`}
       />
-
+      
+      {/* 交易详情模态框 */}
+      <TransactionDetailsModal
+        visible={showTransactionDetails}
+        onCancel={() => setShowTransactionDetails(false)}
+        transaction={selectedTransaction}
+        networkConfig={networkConfig}
+      />
+      
       {/* 添加账户模态框 */}
       <AddAccountModal
         visible={showAddAccountModal}
-        onCancel={() => setShowAddAccountModal(false)}
-        onAdd={handleAddAccount}
-        loading={loading}
+        onCancel={() => {
+          setShowAddAccountModal(false);
+          setLocalError(null);
+        }}
+        onSubmit={handleAddAccount}
         error={localError}
       />
-
-      {/* 切换网络模态框 */}
-      <NetworkSelector 
+      
+      {/* 删除旧版网络选择器模态框 */}
+      {/* <NetworkSelector
         networks={networks}
         currentNetwork={currentNetwork}
-        onNetworkChange={switchNetwork}
+        onNetworkChange={handleNetworkChange}
         isModalVisible={showNetworkModal}
         onModalClose={() => setShowNetworkModal(false)}
-      />
+        onAddNetwork={handleAddNetwork}
+      /> */}
 
       {/* 删除钱包确认模态框 */}
       <Modal
@@ -1139,7 +1281,7 @@ const Dashboard = () => {
           </div>
         )}
       </Modal>
-    </div>
+    </Layout>
   );
 };
 
