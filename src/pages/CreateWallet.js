@@ -71,6 +71,12 @@ const CreateWallet = ({ step: routeStep }) => {
           password: password || prev.password,
           name: name || prev.name
         }));
+        
+        // 立即清除location state中的敏感数据
+        window.history.replaceState(
+          { ...location.state, mnemonic: null, password: null },
+          document.title
+        );
         return; // 如果从location state获取到数据，则不再检查sessionStorage
       }
     }
@@ -93,9 +99,11 @@ const CreateWallet = ({ step: routeStep }) => {
         }
       } catch (error) {
         console.error('解析sessionStorage中的数据出错:', error);
+        // 出错也要清除，防止残留
+        sessionStorage.removeItem('walletCreationData');
       }
     }
-  }, []);
+  }, [location]);
 
   // 计算密码强度
   useEffect(() => {
@@ -230,9 +238,22 @@ const CreateWallet = ({ step: routeStep }) => {
           name: walletData.name
         }));
         
-        // 直接使用window.location.href进行页面跳转
-        console.log('直接使用window.location.href导航到备份助记词页面');
-        window.location.href = '/create/backup';
+        // 设置定时器，确保在页面跳转后清除敏感数据
+        const redirectTimer = setTimeout(() => {
+          // 直接使用window.location.href进行页面跳转
+          console.log('直接使用window.location.href导航到备份助记词页面');
+          window.location.href = '/create/backup';
+          
+          // 设置另一个定时器，在页面跳转后清除sessionStorage中的敏感数据
+          // 这是一个安全措施，虽然新页面会读取并清除数据，但以防万一跳转失败
+          setTimeout(() => {
+            if (document.location.pathname !== '/create/backup') {
+              sessionStorage.removeItem('walletCreationData');
+            }
+          }, 5000); // 5秒后检查，如果没有成功跳转则清除
+        }, 100);
+        
+        return () => clearTimeout(redirectTimer);
       } else {
         console.error('钱包创建失败，没有返回助记词');
         setFormError('创建钱包失败');
@@ -275,13 +296,28 @@ const CreateWallet = ({ step: routeStep }) => {
         if (walletData.password) {
           // 自动解锁用，写入sessionStorage
           sessionStorage.setItem('wallet_auto_unlock', walletData.password);
+          
+          // 设置定时器，确保在页面跳转后清除敏感数据
           setTimeout(() => {
             window.location.href = '/dashboard';
-            setTimeout(() => window.location.reload(), 100);
+            // 页面跳转后清除敏感数据
+            setTimeout(() => {
+              sessionStorage.removeItem('wallet_auto_unlock');
+              // 清除内存中的敏感数据
+              setWalletData(prev => ({
+                ...prev,
+                mnemonic: '',
+                password: '',
+                confirmPassword: ''
+              }));
+              window.location.reload();
+            }, 100);
           }, 1500);
         }
       } catch (error) {
         setFormError('解锁钱包失败，请重新登录');
+        // 确保出错时也清除敏感数据
+        sessionStorage.removeItem('wallet_auto_unlock');
       }
     } else {
       setFormError('助记词验证失败，请检查您的选择');

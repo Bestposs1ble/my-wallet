@@ -1,0 +1,74 @@
+1. 注册/登录（CreateWallet.js、Login.js、WalletContext.js）
+现状与问题
+注册流程（助记词生成、备份、验证）基本合理，但助记词和密码在 sessionStorage 里有短暂明文存储，存在安全隐患。
+登录流程已支持自动解锁，但密码输入错误时提示不够友好，且未做防爆破保护。
+优化建议
+助记词/密码存储：
+只在必要的页面跳转间短暂存储，使用后立即清除（你已做得不错，但建议再review一遍所有 sessionStorage 的 set/remove 时机）。
+登录防爆破：
+增加错误次数计数，连续输错3-5次后短暂锁定登录按钮（如30秒），防止暴力破解。
+错误提示：
+明确区分“密码错误”“钱包不存在”“助记词不可用”等不同错误，提升用户体验。
+2. 账户切换（Dashboard.js、WalletContext.js）
+现状与问题
+账户切换已对齐MetaMask，采用刷新页面方式，能彻底同步所有状态。
+但切换账户时，当前钱包索引和相关状态的持久化依赖 localStorage/sessionStorage，建议统一管理。
+优化建议
+持久化索引：
+切换账户时，除 setCurrentWalletIndex 外，建议同步写入 localStorage（你已实现）。
+切换后自动聚焦/高亮：
+切换账户后，UI应自动高亮当前账户，防止用户误操作。
+3. 转账（SendTransactionModal.js、WalletContext.js）
+现状与问题
+转账流程合理，支持pending、confirmed、failed等状态，且本地和内存同步。
+Gas设置、错误处理、UI反馈已较完善。
+本地钱包互转时，接收方交易历史同步依赖事件和定时器，已基本解决。
+优化建议
+Gas估算：
+建议在UI中增加“自动估算Gas”按钮，调用provider.estimateGas，提升易用性。
+转账防抖：
+防止用户多次点击“发送”按钮导致重复广播，可在发送后禁用按钮，直到有结果。
+链上失败提示：
+如果链上返回revert reason，建议在UI中展示详细失败原因。
+4. 网络切换（NetworkSelector.js、WalletContext.js）
+现状与问题
+网络切换已采用刷新页面方式，能彻底同步所有状态。
+支持自定义网络添加，网络配置持久化到本地。
+优化建议
+网络配置校验：
+添加网络时，建议校验RPC URL有效性、ChainId唯一性，防止用户误添加无效网络。
+切换网络时的loading提示：
+切换网络时，建议在UI上显示loading状态，防止用户误操作。
+5. 自动锁定与安全（WalletContext.js、Settings.js）
+现状与问题
+支持自动锁定，监听用户活动，定时锁定钱包。
+但自动锁定时间设置未持久化到本地，刷新后会丢失。
+优化建议
+自动锁定时间持久化：
+用户在设置页更改自动锁定时间后，建议写入 localStorage 或 settings 配置，刷新后自动恢复。
+锁定时清理敏感状态：
+锁定钱包时，建议清理所有敏感内存状态（如助记词、私钥、sessionStorage 标志等）。
+6. 交易历史（TransactionList.js、storageService.js、WalletContext.js）
+现状与问题
+交易历史合并本地和pending，已支持多账户多网络。
+但本地存储结构为每个账户+网络一份，随着交易增多可能影响性能。
+优化建议
+分页加载/懒加载：
+交易历史较多时，建议分页加载，提升性能。
+IndexedDB优化：
+大量数据建议用 IndexedDB 替代 localStorage，提升读写效率。
+7. 解锁机制（WalletContext.js）
+现状与问题
+已对齐MetaMask，解锁状态持久化到 sessionStorage，刷新/切换不再频繁要求密码。
+优化建议
+安全性提升：
+sessionStorage 标志建议加密或混淆，防止被恶意脚本轻易检测。
+主动锁定时彻底清理：
+lock 时建议清理所有 sessionStorage/localStorage 相关的“已解锁”标志。
+8. 其他建议
+代码结构：
+建议将所有“本地存储/持久化”相关操作统一封装到 storageService，便于维护和升级。
+类型安全：
+未来如迁移到TypeScript，建议所有props、状态、服务接口都加上类型声明。
+单元测试：
+关键业务逻辑（如转账、解锁、切换账户）建议补充单元测试，提升健壮性。

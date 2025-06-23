@@ -10,6 +10,14 @@ import { message } from 'antd';
 // 创建上下文
 const WalletContext = createContext();
 
+// 定义事件类型常量
+const EVENTS = {
+  TRANSACTION_UPDATED: 'transaction_updated',
+  ACCOUNT_CHANGED: 'account_changed',
+  NETWORK_CHANGED: 'network_changed',
+  BALANCE_UPDATED: 'balance_updated'
+};
+
 // 创建上下文提供者组件
 export const WalletProvider = ({ children }) => {
   // 状态
@@ -46,6 +54,7 @@ export const WalletProvider = ({ children }) => {
     setPassword('');
     setMasterMnemonic(null);
     setError(null);
+    sessionStorage.removeItem('wallet_is_unlocked');
   };
 
   // 初始化钱包状态
@@ -59,21 +68,19 @@ export const WalletProvider = ({ children }) => {
         setNetworks(networksConfig);
         const currentNetworkId = storageService.getCurrentNetwork();
         setCurrentNetwork(currentNetworkId);
-        
         // 加载当前网络的代币列表
         const tokensList = storageService.getTokens(currentNetworkId);
         setTokens(tokensList);
-        
         const newProvider = blockchainService.updateProvider(currentNetworkId);
         setProvider(newProvider);
         setIsInitialized(true);
         setLoading(false);
-        // 自动解锁逻辑
-        const autoPwd = sessionStorage.getItem('wallet_auto_unlock');
-        if (autoPwd && hasWalletsData) {
-          unlock(autoPwd).then(success => {
-            if (success) sessionStorage.removeItem('wallet_auto_unlock');
-          });
+        // 自动解锁逻辑（对标MetaMask）
+        const isUnlocked = sessionStorage.getItem('wallet_is_unlocked');
+        if (isUnlocked === 'true' && hasWalletsData) {
+          // 自动解锁，不需要密码
+          setIsLocked(false);
+          setError(null);
         }
       } catch (error) {
         console.error('初始化钱包状态失败:', error);
@@ -447,6 +454,8 @@ export const WalletProvider = ({ children }) => {
       setIsLocked(false);
       setError(null);
       setLastActivity(Date.now());
+      // 解锁成功后，设置 sessionStorage 标志
+      sessionStorage.setItem('wallet_is_unlocked', 'true');
       return true;
     } catch (error) {
       console.error('解锁钱包失败:', error);
@@ -738,39 +747,8 @@ export const WalletProvider = ({ children }) => {
     if (index >= 0 && index < wallets.length) {
       setCurrentWalletIndex(index);
       storageService.saveCurrentWalletIndex(index);
-      
-      // 在切换钱包后主动刷新余额
-      const fetchBalances = async () => {
-        if (isLocked || wallets.length === 0 || !provider) {
-          return;
-        }
-        
-        try {
-          console.log(`切换钱包后更新余额... 当前网络: ${currentNetwork}`);
-          // 创建一个新的余额对象，不基于之前的余额
-          const newBalances = {};
-          
-          // 更新所有钱包的余额，确保数据一致性
-          for (const wallet of wallets) {
-            try {
-              const balance = await blockchainService.getEthBalance(wallet.address);
-              newBalances[wallet.address] = balance;
-            } catch (error) {
-              console.error(`获取地址 ${wallet.address} 余额失败:`, error);
-              // 如果获取失败，设置为0
-              newBalances[wallet.address] = '0';
-            }
-          }
-          
-          // 更新余额状态
-          setAccountBalances(newBalances);
-        } catch (error) {
-          console.error('更新账户余额失败:', error);
-        }
-      };
-      
-      fetchBalances();
-      setError(null);
+      // 彻底对齐MetaMask体验，切换后刷新页面
+      window.location.reload();
       return true;
     }
     setError('无效的钱包索引');
@@ -782,50 +760,8 @@ export const WalletProvider = ({ children }) => {
     if (networks[networkId]) {
       setCurrentNetwork(networkId);
       storageService.saveCurrentNetwork(networkId);
-      
-      // 更新提供者
-      const newProvider = blockchainService.updateProvider(networkId);
-      setProvider(newProvider);
-      
-      // 在切换网络后主动刷新余额
-      const fetchBalances = async () => {
-        if (isLocked || wallets.length === 0 || !newProvider) {
-          return;
-        }
-        
-        try {
-          console.log(`切换网络后更新余额... 当前网络: ${networkId}`);
-          // 创建一个新的余额对象，不基于之前的余额
-          const newBalances = {};
-          let updated = false;
-          
-          for (const wallet of wallets) {
-            try {
-              console.log(`获取地址 ${wallet.address} 的余额`);
-              const balance = await blockchainService.getEthBalance(wallet.address);
-              console.log(`地址 ${wallet.address} 余额: ${balance}`);
-              
-              // 直接更新余额，不比较之前的值
-              newBalances[wallet.address] = balance;
-              updated = true;
-            } catch (error) {
-              console.error(`获取地址 ${wallet.address} 余额失败:`, error);
-            }
-          }
-          
-          if (updated) {
-            console.log('余额更新完成:', newBalances);
-            setAccountBalances(newBalances);
-          }
-        } catch (error) {
-          console.error('更新账户余额失败:', error);
-        }
-      };
-      
-      // 立即触发余额更新
-      fetchBalances();
-      
-      setError(null);
+      // 彻底对齐MetaMask体验，切换后刷新页面
+      window.location.reload();
       return true;
     }
     setError(`网络 ${networkId} 不存在`);
@@ -955,6 +891,15 @@ export const WalletProvider = ({ children }) => {
         storageService.addTransactionToHistory(receiverTx, receiverWallet.address, currentNetwork);
       }
       
+      // 触发交易更新事件，通知组件更新交易历史
+      console.log('发送交易后触发更新事件:', senderTx.hash);
+      emitter.current.emit(EVENTS.TRANSACTION_UPDATED, {
+        walletAddresses: [currentWallet.address.toLowerCase(), receiverWallet?.address?.toLowerCase()].filter(Boolean),
+        networkId: currentNetwork,
+        txHash: tx.hash,
+        transactionType: 'send'
+      });
+      
       // 异步监听交易确认
       tx.wait(1)
         .then(receipt => {
@@ -988,6 +933,20 @@ export const WalletProvider = ({ children }) => {
           if (receiverWallet) {
             storageService.updateTransactionStatus(tx.hash, 'confirmed', receiverWallet.address, currentNetwork);
           }
+          
+          // 触发交易更新事件，通知组件更新交易历史
+          console.log('交易确认后触发更新事件:', updatedSenderTx.hash);
+          
+          // 获取当前所有钱包地址列表
+          const allWalletAddresses = wallets.map(w => w.address.toLowerCase());
+          
+          emitter.current.emit(EVENTS.TRANSACTION_UPDATED, {
+            walletAddresses: allWalletAddresses,
+            networkId: currentNetwork,
+            txHash: tx.hash,
+            status: 'confirmed',
+            transactionType: 'send'
+          });
           
           // 更新余额（延迟1秒后，以确保网络已同步）
           setTimeout(async () => {
@@ -1308,6 +1267,15 @@ export const WalletProvider = ({ children }) => {
         storageService.addTransactionToHistory(receiverTx, receiverWallet.address, currentNetwork);
       }
       
+      // 触发交易更新事件，通知组件更新交易历史
+      console.log('发送交易后触发更新事件:', senderTx.hash);
+      emitter.current.emit(EVENTS.TRANSACTION_UPDATED, {
+        walletAddresses: [currentWallet.address.toLowerCase(), receiverWallet?.address?.toLowerCase()].filter(Boolean),
+        networkId: currentNetwork,
+        txHash: tx.hash,
+        transactionType: 'send'
+      });
+      
       // 异步监听交易确认
       tx.wait(1)
         .then(receipt => {
@@ -1342,7 +1310,21 @@ export const WalletProvider = ({ children }) => {
             storageService.updateTransactionStatus(tx.hash, 'confirmed', receiverWallet.address, currentNetwork);
           }
           
-          // 更新代币余额
+          // 触发交易更新事件，通知组件更新交易历史
+          console.log('交易确认后触发更新事件:', updatedSenderTx.hash);
+          
+          // 获取当前所有钱包地址列表
+          const allWalletAddresses = wallets.map(w => w.address.toLowerCase());
+          
+          emitter.current.emit(EVENTS.TRANSACTION_UPDATED, {
+            walletAddresses: allWalletAddresses,
+            networkId: currentNetwork,
+            txHash: tx.hash,
+            status: 'confirmed',
+            transactionType: 'send'
+          });
+          
+          // 更新余额（延迟1秒后，以确保网络已同步）
           setTimeout(() => fetchTokenBalances(), 1000);
         })
         .catch(err => {
@@ -1452,7 +1434,11 @@ export const WalletProvider = ({ children }) => {
     sendTokenTransaction,
     getCurrentWalletTokenBalances,
     getTokenBalance,
-    fetchTokenBalances
+    fetchTokenBalances,
+    // 事件相关
+    EVENTS,
+    on: (event, callback) => emitter.current.on(event, callback),
+    off: (event, callback) => emitter.current.off(event, callback)
   };
 
   return (

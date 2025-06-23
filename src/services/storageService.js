@@ -321,9 +321,25 @@ const saveTransactionHistory = (transactions, address, networkId) => {
  * @returns {Array} 交易历史
  */
 const getTransactionHistory = (address, networkId) => {
-  const key = `${KEYS.TX_HISTORY}-${address.toLowerCase()}-${networkId}`;
-  const history = localStorage.getItem(key);
-  return history ? JSON.parse(history) : [];
+  if (!address) {
+    console.error('获取交易历史失败: 地址为空');
+    return [];
+  }
+  
+  // 确保地址转换为小写
+  const normalizedAddress = address.toLowerCase();
+  const key = `${KEYS.TX_HISTORY}-${normalizedAddress}-${networkId}`;
+  console.log(`获取交易历史, 键值: ${key}`);
+  
+  try {
+    const history = localStorage.getItem(key);
+    const parsedHistory = history ? JSON.parse(history) : [];
+    console.log(`获取到${parsedHistory.length}条交易记录`);
+    return parsedHistory;
+  } catch (error) {
+    console.error('解析交易历史记录失败:', error);
+    return [];
+  }
 };
 
 /**
@@ -333,10 +349,48 @@ const getTransactionHistory = (address, networkId) => {
  * @param {string} networkId 网络ID
  */
 const addTransactionToHistory = (transaction, address, networkId) => {
-  const history = getTransactionHistory(address, networkId);
-  const newHistory = [transaction, ...history];
-  saveTransactionHistory(newHistory, address, networkId);
-  return newHistory;
+  if (!address || !transaction) {
+    console.error('添加交易历史失败: 参数不完整', { address, networkId, transaction });
+    return [];
+  }
+  
+  // 确保地址转换为小写
+  const normalizedAddress = address.toLowerCase();
+  
+  // 确保交易from和to地址都是小写
+  if (transaction.from) {
+    transaction.from = transaction.from.toLowerCase();
+  }
+  if (transaction.to) {
+    transaction.to = transaction.to.toLowerCase();
+  }
+  
+  console.log(`添加交易到历史, 地址: ${normalizedAddress}, 网络: ${networkId}, 交易哈希: ${transaction.hash}`);
+  
+  try {
+    const history = getTransactionHistory(normalizedAddress, networkId);
+    
+    // 检查是否已存在相同交易哈希
+    const existingIndex = history.findIndex(tx => tx.hash === transaction.hash);
+    
+    let newHistory;
+    if (existingIndex >= 0) {
+      // 如果存在相同的交易哈希，更新该交易
+      console.log('更新已存在的交易记录');
+      newHistory = [...history];
+      newHistory[existingIndex] = { ...newHistory[existingIndex], ...transaction };
+    } else {
+      // 否则添加新交易到历史记录开头
+      console.log('添加新的交易记录');
+      newHistory = [transaction, ...history];
+    }
+    
+    saveTransactionHistory(newHistory, normalizedAddress, networkId);
+    return newHistory;
+  } catch (error) {
+    console.error('添加交易到历史记录失败:', error);
+    return [];
+  }
 };
 
 /**
@@ -348,16 +402,39 @@ const addTransactionToHistory = (transaction, address, networkId) => {
  * @returns {boolean} 是否更新成功
  */
 const updateTransactionStatus = (txHash, status, address, networkId) => {
-  const history = getTransactionHistory(address, networkId);
-  const txIndex = history.findIndex(tx => tx.hash === txHash);
-  
-  if (txIndex === -1) {
+  if (!address || !txHash) {
+    console.error('更新交易状态失败: 参数不完整', { txHash, status, address, networkId });
     return false;
   }
   
-  history[txIndex].status = status;
-  saveTransactionHistory(history, address, networkId);
-  return true;
+  // 确保地址转换为小写
+  const normalizedAddress = address.toLowerCase();
+  
+  console.log(`更新交易状态, 地址: ${normalizedAddress}, 交易哈希: ${txHash}, 状态: ${status}`);
+  
+  try {
+    const history = getTransactionHistory(normalizedAddress, networkId);
+    const txIndex = history.findIndex(tx => tx.hash === txHash);
+    
+    if (txIndex === -1) {
+      console.warn(`未找到要更新的交易: ${txHash}`);
+      return false;
+    }
+    
+    console.log(`找到交易, 索引: ${txIndex}, 当前状态: ${history[txIndex].status}, 新状态: ${status}`);
+    
+    history[txIndex].status = status;
+    if (status === 'confirmed') {
+      history[txIndex].confirmations = (history[txIndex].confirmations || 0) + 1;
+    }
+    
+    saveTransactionHistory(history, normalizedAddress, networkId);
+    console.log(`交易状态已更新为: ${status}`);
+    return true;
+  } catch (error) {
+    console.error('更新交易状态失败:', error);
+    return false;
+  }
 };
 
 // 默认网络配置

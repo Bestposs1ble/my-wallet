@@ -71,7 +71,10 @@ const Dashboard = () => {
     addDerivedAccount,
     importWalletByPrivateKey,
     resetWallet,
-    backupWallet
+    backupWallet,
+    EVENTS,
+    on,
+    off
   } = useWallet();
 
   // 引入storageService
@@ -105,11 +108,127 @@ const Dashboard = () => {
   // 加载当前账户的交易记录
   const [accountTransactions, setAccountTransactions] = useState([]);
   
-  // 当前账户或网络变化时，加载对应的交易记录
+  // 监听交易更新事件
+  useEffect(() => {
+    const handleTransactionUpdated = (data) => {
+      const currentWallet = getCurrentWallet();
+      if (!currentWallet) return;
+      
+      // 检查事件是否与当前钱包相关
+      if (data.walletAddresses.includes(currentWallet.address.toLowerCase()) && 
+          data.networkId === currentNetwork) {
+        // 刷新当前账户的交易记录
+        const storedTransactions = storageService.getTransactionHistory(
+          currentWallet.address, 
+          currentNetwork
+        );
+        
+        // 合并待处理交易和存储的交易记录
+        const relevantPendingTxs = pendingTransactions.filter(tx => 
+          tx.from.toLowerCase() === currentWallet.address.toLowerCase() || 
+          tx.to.toLowerCase() === currentWallet.address.toLowerCase()
+        );
+        
+        const txMap = new Map();
+        
+        relevantPendingTxs.forEach(tx => {
+          txMap.set(tx.hash, tx);
+        });
+        
+        storedTransactions.forEach(tx => {
+          if (!txMap.has(tx.hash)) {
+            txMap.set(tx.hash, tx);
+          }
+        });
+        
+        const combinedTransactions = Array.from(txMap.values())
+          .sort((a, b) => b.timestamp - a.timestamp);
+        
+        setAccountTransactions(combinedTransactions);
+      }
+    };
+    
+    // 添加事件监听器
+    on(EVENTS.TRANSACTION_UPDATED, handleTransactionUpdated);
+    
+    // 组件卸载时移除事件监听器
+    return () => {
+      off(EVENTS.TRANSACTION_UPDATED, handleTransactionUpdated);
+    };
+  }, [currentWalletIndex, currentNetwork, pendingTransactions, getCurrentWallet, on, off, EVENTS]);
+
+  // 监听账户变化事件
+  useEffect(() => {
+    const handleAccountChanged = (data) => {
+      console.log('账户切换事件触发:', data);
+      // 账户切换时立即刷新交易记录
+      const currentWallet = getCurrentWallet();
+      if (!currentWallet) return;
+      
+      // 明确记录日志，方便调试
+      console.log('正在加载账户交易历史:', currentWallet.address, currentNetwork);
+      
+      const storedTransactions = storageService.getTransactionHistory(
+        currentWallet.address, 
+        currentNetwork
+      );
+      
+      console.log('从存储加载的交易记录:', storedTransactions.length);
+      
+      const relevantPendingTxs = pendingTransactions.filter(tx => 
+        tx.from.toLowerCase() === currentWallet.address.toLowerCase() || 
+        tx.to.toLowerCase() === currentWallet.address.toLowerCase()
+      );
+      
+      console.log('相关待处理交易:', relevantPendingTxs.length);
+      
+      const txMap = new Map();
+      
+      relevantPendingTxs.forEach(tx => {
+        txMap.set(tx.hash, tx);
+      });
+      
+      storedTransactions.forEach(tx => {
+        if (!txMap.has(tx.hash)) {
+          txMap.set(tx.hash, tx);
+        }
+      });
+      
+      const combinedTransactions = Array.from(txMap.values())
+        .sort((a, b) => b.timestamp - a.timestamp);
+      
+      console.log('最终合并的交易记录:', combinedTransactions.length);
+      
+      // 设置交易记录状态，触发UI更新
+      setAccountTransactions(combinedTransactions);
+    };
+    
+    // 添加账户变化事件监听器
+    on(EVENTS.ACCOUNT_CHANGED, handleAccountChanged);
+    
+    // 手动触发一次账户切换事件，确保初始数据正确加载
+    const currentWallet = getCurrentWallet();
+    if (currentWallet) {
+      console.log('初始化时手动触发账户事件:', currentWallet.address);
+      handleAccountChanged({
+        address: currentWallet.address,
+        networkId: currentNetwork
+      });
+    }
+    
+    // 组件卸载时移除事件监听器
+    return () => {
+      off(EVENTS.ACCOUNT_CHANGED, handleAccountChanged);
+    };
+  }, [currentNetwork, pendingTransactions, getCurrentWallet, on, off, EVENTS]);
+
+  // 初始加载交易历史
   useEffect(() => {
     const loadAccountTransactions = () => {
       const currentWallet = getCurrentWallet();
       if (!currentWallet) return;
+      
+      console.log('初始化加载交易历史:', currentWallet.address);
       
       // 从本地存储加载交易记录
       const storedTransactions = storageService.getTransactionHistory(
@@ -117,11 +236,15 @@ const Dashboard = () => {
         currentNetwork
       );
       
+      console.log('加载到存储交易记录数量:', storedTransactions.length);
+      
       // 合并待处理交易和存储的交易记录
       const relevantPendingTxs = pendingTransactions.filter(tx => 
         tx.from.toLowerCase() === currentWallet.address.toLowerCase() || 
         tx.to.toLowerCase() === currentWallet.address.toLowerCase()
       );
+      
+      console.log('相关待处理交易数量:', relevantPendingTxs.length);
       
       // 使用Map去重，以交易哈希为键
       const txMap = new Map();
@@ -142,11 +265,23 @@ const Dashboard = () => {
       const combinedTransactions = Array.from(txMap.values())
         .sort((a, b) => b.timestamp - a.timestamp);
       
+      console.log('最终合并的交易记录数量:', combinedTransactions.length);
       setAccountTransactions(combinedTransactions);
     };
     
+    // 加载交易记录
     loadAccountTransactions();
-  }, [currentWalletIndex, currentNetwork, pendingTransactions]);
+    
+    // 定时刷新交易历史(每3秒刷新一次)
+    const refreshInterval = setInterval(() => {
+      console.log('定时刷新交易历史');
+      loadAccountTransactions();
+    }, 3000);
+    
+    return () => {
+      clearInterval(refreshInterval);
+    };
+  }, [currentWalletIndex, currentNetwork, pendingTransactions, getCurrentWallet]);
 
   // 处理网络切换
   const handleNetworkChange = (networkId) => {
@@ -1124,8 +1259,7 @@ const Dashboard = () => {
       {/* 发送交易模态框 */}
       <SendTransactionModal
         visible={showSendModal}
-        onCancel={() => setShowSendModal(false)}
-        onSubmit={handleSendSubmit}
+        onClose={() => setShowSendModal(false)}
         from={currentWallet?.address || ''}
         balance={currentBalance}
         provider={provider}

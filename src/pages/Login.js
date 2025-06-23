@@ -10,6 +10,11 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [localError, setLocalError] = useState('');
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  // 新增登录防爆破保护
+  const [loginAttempts, setLoginAttempts] = useState(0);
+  const [loginDisabled, setLoginDisabled] = useState(false);
+  const [lockoutTimer, setLockoutTimer] = useState(null);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
   
   useEffect(() => {
     // 检查是否是新创建的钱包
@@ -26,7 +31,51 @@ const Login = () => {
     if (!isLocked) {
       navigate('/dashboard');
     }
-  }, [isLocked, navigate]);
+    
+    // 从localStorage恢复登录尝试次数
+    const savedAttempts = localStorage.getItem('login_attempts');
+    const savedLockoutTime = localStorage.getItem('login_lockout_until');
+    
+    if (savedAttempts) {
+      setLoginAttempts(parseInt(savedAttempts, 10));
+    }
+    
+    if (savedLockoutTime) {
+      const lockoutUntil = parseInt(savedLockoutTime, 10);
+      const now = Date.now();
+      
+      if (lockoutUntil > now) {
+        // 仍在锁定期内
+        setLoginDisabled(true);
+        const remainingTime = Math.ceil((lockoutUntil - now) / 1000);
+        setLockoutRemaining(remainingTime);
+        
+        // 设置倒计时
+        const timer = setInterval(() => {
+          setLockoutRemaining(prev => {
+            if (prev <= 1) {
+              clearInterval(timer);
+              setLoginDisabled(false);
+              localStorage.removeItem('login_lockout_until');
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+        
+        setLockoutTimer(timer);
+      } else {
+        // 锁定期已过
+        localStorage.removeItem('login_lockout_until');
+      }
+    }
+    
+    return () => {
+      if (lockoutTimer) {
+        clearInterval(lockoutTimer);
+      }
+    };
+  }, [isLocked, navigate, lockoutTimer]);
   
   const handleChange = (e) => {
     setPassword(e.target.value);
@@ -39,14 +88,79 @@ const Login = () => {
       return;
     }
     
+    if (loginDisabled) {
+      setLocalError(`登录暂时被锁定，请在${lockoutRemaining}秒后重试`);
+      return;
+    }
+    
     try {
       const success = await unlock(password);
       
       if (success) {
+        // 登录成功，重置尝试次数
+        setLoginAttempts(0);
+        localStorage.removeItem('login_attempts');
         navigate('/dashboard');
+      } else {
+        // 登录失败，增加尝试次数
+        const newAttempts = loginAttempts + 1;
+        setLoginAttempts(newAttempts);
+        localStorage.setItem('login_attempts', newAttempts.toString());
+        
+        // 设置更友好的错误消息
+        if (!wallets || wallets.length === 0) {
+          setLocalError('未检测到钱包数据，请先创建钱包');
+        } else {
+          setLocalError('密码错误，请重试');
+        }
+        
+        // 检查是否需要锁定
+        if (newAttempts >= 5) {
+          const lockoutDuration = 30; // 锁定30秒
+          const lockoutUntil = Date.now() + (lockoutDuration * 1000);
+          
+          setLoginDisabled(true);
+          setLockoutRemaining(lockoutDuration);
+          localStorage.setItem('login_lockout_until', lockoutUntil.toString());
+          
+          // 设置倒计时
+          const timer = setInterval(() => {
+            setLockoutRemaining(prev => {
+              if (prev <= 1) {
+                clearInterval(timer);
+                setLoginDisabled(false);
+                localStorage.removeItem('login_lockout_until');
+                // 重置尝试次数
+                setLoginAttempts(0);
+                localStorage.removeItem('login_attempts');
+                return 0;
+              }
+              return prev - 1;
+            });
+          }, 1000);
+          
+          setLockoutTimer(timer);
+          setLocalError(`登录失败次数过多，已锁定${lockoutDuration}秒`);
+        }
       }
     } catch (error) {
-      setLocalError(error.message || '解锁钱包失败');
+      // 错误处理增强
+      let errorMessage = '解锁钱包失败';
+      
+      if (error.message.includes('无法解密')) {
+        errorMessage = '密码错误，无法解密钱包数据';
+      } else if (error.message.includes('助记词')) {
+        errorMessage = '助记词验证失败，钱包数据可能已损坏';
+      } else if (error.message.includes('网络')) {
+        errorMessage = '网络连接错误，请检查您的网络连接';
+      }
+      
+      setLocalError(errorMessage);
+      
+      // 同样增加尝试次数
+      const newAttempts = loginAttempts + 1;
+      setLoginAttempts(newAttempts);
+      localStorage.setItem('login_attempts', newAttempts.toString());
     }
   };
   
@@ -124,6 +238,7 @@ const Login = () => {
                 value={password}
                 onChange={handleChange}
                 onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+                disabled={loginDisabled}
               />
             </div>
             <p className="mt-1 text-xs text-gray-500">
@@ -139,19 +254,29 @@ const Login = () => {
             </div>
           )}
           
+          {/* 锁定倒计时提示 */}
+          {loginDisabled && lockoutRemaining > 0 && (
+            <div className="bg-yellow-50 border border-yellow-100 text-yellow-700 p-3 rounded-md flex items-start space-x-2 mb-4">
+              <WarningOutlined className="flex-shrink-0 mt-0.5" />
+              <span className="text-sm">
+                登录暂时被锁定，请在 <span className="font-medium">{lockoutRemaining}</span> 秒后重试
+              </span>
+            </div>
+          )}
+          
           {/* 按钮区域 */}
           <div className="space-y-4">
             <button
               type="button"
               className={`w-full py-2.5 px-4 rounded-lg font-medium text-white ${
-                loading 
+                loading || loginDisabled
                   ? 'bg-blue-400 cursor-not-allowed' 
                   : 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2'
               }`}
               onClick={handleLogin}
-              disabled={loading}
+              disabled={loading || loginDisabled}
             >
-              {loading ? '解锁中...' : '解锁'}
+              {loading ? '解锁中...' : loginDisabled ? `请等待 ${lockoutRemaining} 秒` : '解锁'}
             </button>
           </div>
           
