@@ -577,6 +577,20 @@ const saveMasterMnemonic = (mnemonic, password) => {
   localStorage.setItem(KEYS.MASTER_MNEMONIC, encryptedData);
 };
 
+/**
+ * 设置当前钱包索引（saveCurrentWalletIndex的别名）
+ * @param {number} index 当前钱包索引
+ */
+const setCurrentWalletIndex = saveCurrentWalletIndex;
+
+/**
+ * 保存待处理交易列表
+ * @param {Array} transactions 待处理交易列表
+ */
+const savePendingTransactions = (transactions) => {
+  localStorage.setItem('metamask-clone-pending-transactions', JSON.stringify(transactions));
+};
+
 export {
   KEYS,
   hasWallets,
@@ -611,5 +625,7 @@ export {
   clearAllData,
   hasWalletsInDB,
   saveMasterMnemonic,
-  getMasterMnemonic
+  getMasterMnemonic,
+  setCurrentWalletIndex,
+  savePendingTransactions
 }; 

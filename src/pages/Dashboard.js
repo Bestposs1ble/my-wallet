@@ -72,6 +72,9 @@ const Dashboard = () => {
     importWalletByPrivateKey,
     resetWallet,
     backupWallet,
+    deleteWallet,
+    updateWalletName,
+    exportPrivateKey,
     EVENTS,
     on,
     off
@@ -705,6 +708,10 @@ const Dashboard = () => {
                   loading={loading}
                   onSend={handleSend}
                   onReceive={handleReceive}
+                  onDelete={deleteWallet}
+                  onRename={updateWalletName}
+                  onExportPrivateKey={exportPrivateKey}
+                  isLastWallet={wallets.length === 1}
                 />
               </div>
               

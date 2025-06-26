@@ -425,6 +425,329 @@ const createProvider = (url, chainId) => {
   return ethersHelper.createProvider(url, chainId);
 };
 
+/**
+ * 获取ETH价格
+ * @returns {Promise<{usd: number, usd_24h_change: number}>} ETH价格信息
+ */
+const getEthPrice = async () => {
+  try {
+    // 使用CoinGecko API获取ETH价格
+    const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd&include_24hr_change=true');
+    const data = await response.json();
+    
+    if (data && data.ethereum) {
+      return {
+        usd: data.ethereum.usd,
+        usd_24h_change: data.ethereum.usd_24h_change
+      };
+    }
+    
+    throw new Error('无法获取ETH价格数据');
+  } catch (error) {
+    console.error('获取ETH价格失败:', error);
+    // 返回默认价格，避免UI崩溃
+    return {
+      usd: 3000,
+      usd_24h_change: 0
+    };
+  }
+};
+
+/**
+ * 获取代币价格
+ * @param {string} tokenAddress 代币合约地址
+ * @returns {Promise<{usd: number, usd_24h_change: number}>} 代币价格信息
+ */
+const getTokenPrice = async (tokenAddress) => {
+  try {
+    // 使用CoinGecko API获取代币价格
+    const response = await fetch(`https://api.coingecko.com/api/v3/simple/token_price/ethereum?contract_addresses=${tokenAddress}&vs_currencies=usd&include_24hr_change=true`);
+    const data = await response.json();
+    
+    if (data && data[tokenAddress.toLowerCase()]) {
+      return {
+        usd: data[tokenAddress.toLowerCase()].usd,
+        usd_24h_change: data[tokenAddress.toLowerCase()].usd_24h_change
+      };
+    }
+    
+    throw new Error(`无法获取代币 ${tokenAddress} 的价格数据`);
+  } catch (error) {
+    console.error(`获取代币 ${tokenAddress} 价格失败:`, error);
+    // 返回默认价格，避免UI崩溃
+    return {
+      usd: 0,
+      usd_24h_change: 0
+    };
+  }
+};
+
+/**
+ * 批量获取代币价格
+ * @param {string[]} tokenAddresses 代币合约地址数组
+ * @returns {Promise<Object>} 代币价格信息映射表
+ */
+const getTokenPrices = async (tokenAddresses) => {
+  if (!tokenAddresses || tokenAddresses.length === 0) {
+    return {};
+  }
+  
+  try {
+    // 将地址转换为小写并去重
+    const uniqueAddresses = [...new Set(tokenAddresses.map(addr => addr.toLowerCase()))];
+    
+    // 使用CoinGecko API批量获取代币价格
+    const response = await fetch(`https://api.coingecko.com/api/v3/simple/token_price/ethereum?contract_addresses=${uniqueAddresses.join(',')}&vs_currencies=usd&include_24hr_change=true`);
+    const data = await response.json();
+    
+    // 如果API返回错误，则尝试单个获取
+    if (!data || Object.keys(data).length === 0) {
+      console.warn('批量获取代币价格失败，尝试单个获取');
+      
+      const prices = {};
+      for (const address of uniqueAddresses) {
+        try {
+          const price = await getTokenPrice(address);
+          if (price) {
+            prices[address] = price;
+          }
+        } catch (err) {
+          console.error(`获取代币 ${address} 价格失败:`, err);
+        }
+      }
+      
+      return prices;
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('批量获取代币价格失败:', error);
+    return {};
+  }
+};
+
+/**
+ * 增强版代币价格获取，支持多种数据源和更多价格信息
+ * @param {Array<Object>} tokens 代币列表，每个代币包含address、symbol等信息
+ * @returns {Promise<Object>} 代币价格信息映射表
+ */
+const fetchTokenPrices = async (tokens) => {
+  if (!tokens || tokens.length === 0) {
+    return {};
+  }
+  
+  try {
+    // 准备代币地址列表和符号列表
+    const tokenAddresses = tokens.map(token => token.address.toLowerCase());
+    const tokenSymbols = tokens.map(token => token.symbol.toLowerCase());
+    
+    // 创建结果对象
+    const priceResults = {};
+    
+    // 尝试从CoinGecko获取价格
+    try {
+      // 使用CoinGecko API批量获取代币价格
+      const response = await fetch(`https://api.coingecko.com/api/v3/simple/token_price/ethereum?contract_addresses=${tokenAddresses.join(',')}&vs_currencies=usd,eth&include_24hr_change=true&include_24hr_vol=true&include_market_cap=true`);
+      const data = await response.json();
+      
+      // 处理结果
+      for (const [address, priceData] of Object.entries(data)) {
+        priceResults[address] = {
+          usd: priceData.usd || 0,
+          eth: priceData.eth || 0,
+          usd_24h_change: priceData.usd_24h_change || 0,
+          usd_24h_vol: priceData.usd_24h_vol || 0,
+          market_cap: priceData.usd_market_cap || 0,
+          source: 'coingecko'
+        };
+      }
+    } catch (coinGeckoError) {
+      console.warn('CoinGecko API调用失败:', coinGeckoError.message);
+    }
+    
+    // 如果有些代币没有获取到价格，尝试其他数据源
+    const missingTokens = tokens.filter(token => 
+      !priceResults[token.address.toLowerCase()]
+    );
+    
+    if (missingTokens.length > 0) {
+      // 尝试从1inch API获取价格
+      try {
+        for (const token of missingTokens) {
+          try {
+            // 1inch报价API
+            const response = await fetch(`https://api.1inch.io/v5.0/1/quote?fromTokenAddress=${token.address}&toTokenAddress=0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE&amount=1000000000000000000`);
+            const data = await response.json();
+            
+            if (data && data.toTokenAmount) {
+              const ethPrice = await getEthPrice();
+              const tokenInEth = ethers.utils.formatEther(data.toTokenAmount);
+              const tokenInUsd = parseFloat(tokenInEth) * ethPrice.usd;
+              
+              priceResults[token.address.toLowerCase()] = {
+                usd: tokenInUsd,
+                eth: parseFloat(tokenInEth),
+                usd_24h_change: 0, // 1inch不提供此数据
+                source: '1inch'
+              };
+            }
+          } catch (tokenError) {
+            console.warn(`无法从1inch获取代币 ${token.symbol} 价格:`, tokenError.message);
+          }
+        }
+      } catch (inchError) {
+        console.warn('1inch API调用失败:', inchError.message);
+      }
+    }
+    
+    // 返回结果
+    return priceResults;
+  } catch (error) {
+    console.error('获取代币价格失败:', error);
+    return {};
+  }
+};
+
+/**
+ * 使用价格数据更新代币列表
+ * @param {Array<Object>} tokens 代币列表
+ * @returns {Promise<Array<Object>>} 更新后的代币列表
+ */
+const updateTokensWithPrices = async (tokens) => {
+  if (!tokens || tokens.length === 0) {
+    return [];
+  }
+  
+  try {
+    // 获取代币价格
+    const priceData = await fetchTokenPrices(tokens);
+    
+    // 更新代币列表
+    return tokens.map(token => {
+      const tokenAddress = token.address.toLowerCase();
+      const price = priceData[tokenAddress];
+      
+      if (price) {
+        // 计算USD价值
+        const balance = parseFloat(token.balance || '0');
+        const usdBalance = balance * price.usd;
+        
+        return {
+          ...token,
+          usdPrice: price.usd,
+          ethPrice: price.eth,
+          usdBalance: usdBalance.toFixed(2),
+          priceChange24h: price.usd_24h_change,
+          priceSource: price.source
+        };
+      }
+      
+      return token;
+    });
+  } catch (error) {
+    console.error('更新代币价格失败:', error);
+    return tokens; // 返回原始代币列表
+  }
+};
+
+/**
+ * 自动发现钱包持有的代币
+ * @param {string} walletAddress 钱包地址
+ * @returns {Promise<Array>} 发现的代币列表
+ */
+const discoverTokens = async (walletAddress) => {
+  try {
+    // 这里可以使用Etherscan API或其他服务来获取钱包持有的代币
+    // 以下是一个示例实现，实际应用中应该使用真实的API
+    
+    // 获取当前网络
+    const currentProvider = getProvider();
+    const network = await currentProvider.getNetwork();
+    
+    // 根据网络选择API
+    let apiUrl;
+    let apiKey = 'YourEtherscanApiKey'; // 实际应用中应该从配置中获取
+    
+    if (network.chainId === 1) {
+      // 主网
+      apiUrl = `https://api.etherscan.io/api?module=account&action=tokentx&address=${walletAddress}&sort=desc&apikey=${apiKey}`;
+    } else if (network.chainId === 11155111) {
+      // Sepolia测试网
+      apiUrl = `https://api-sepolia.etherscan.io/api?module=account&action=tokentx&address=${walletAddress}&sort=desc&apikey=${apiKey}`;
+    } else {
+      // 模拟数据，用于本地测试
+      console.log('使用模拟数据进行代币发现');
+      
+      return [
+        {
+          address: '0xdac17f958d2ee523a2206206994597c13d831ec7',
+          symbol: 'USDT',
+          name: 'Tether USD',
+          decimals: 6,
+          balance: '100.0',
+          logo: 'https://cryptologos.cc/logos/tether-usdt-logo.png'
+        },
+        {
+          address: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+          symbol: 'USDC',
+          name: 'USD Coin',
+          decimals: 6,
+          balance: '200.0',
+          logo: 'https://cryptologos.cc/logos/usd-coin-usdc-logo.png'
+        },
+        {
+          address: '0x6b175474e89094c44da98b954eedeac495271d0f',
+          symbol: 'DAI',
+          name: 'Dai Stablecoin',
+          decimals: 18,
+          balance: '50.0',
+          logo: 'https://cryptologos.cc/logos/multi-collateral-dai-dai-logo.png'
+        }
+      ];
+    }
+    
+    // 发起API请求
+    const response = await fetch(apiUrl);
+    const data = await response.json();
+    
+    if (data.status === '1' && data.result) {
+      // 处理交易数据，提取唯一的代币
+      const uniqueTokens = {};
+      
+      for (const tx of data.result) {
+        const tokenAddress = tx.contractAddress.toLowerCase();
+        
+        if (!uniqueTokens[tokenAddress]) {
+          // 获取代币信息
+          try {
+            const tokenInfo = await getTokenInfo(tokenAddress);
+            const tokenBalance = await getTokenBalance(tokenAddress, walletAddress);
+            
+            if (tokenInfo && parseFloat(tokenBalance) > 0) {
+              uniqueTokens[tokenAddress] = {
+                address: tokenAddress,
+                symbol: tokenInfo.symbol,
+                name: tokenInfo.name,
+                decimals: tokenInfo.decimals,
+                balance: tokenBalance
+              };
+            }
+          } catch (err) {
+            console.warn(`获取代币 ${tokenAddress} 信息失败:`, err);
+          }
+        }
+      }
+      
+      return Object.values(uniqueTokens);
+    }
+    
+    return [];
+  } catch (error) {
+    console.error('发现代币失败:', error);
+    return [];
+  }
+};
+
 export {
   initBlockchainService,
   getProvider,
@@ -443,5 +766,11 @@ export {
   getTokenBalance,
   getMultipleTokenBalances,
   sendTokenTransaction,
-  estimateTokenTransactionGas
+  estimateTokenTransactionGas,
+  getEthPrice,
+  getTokenPrice,
+  getTokenPrices,
+  fetchTokenPrices,
+  updateTokensWithPrices,
+  discoverTokens
 }; 

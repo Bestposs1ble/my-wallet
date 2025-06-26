@@ -4,6 +4,7 @@
  */
 import EventEmitter from 'events';
 import * as blockchainService from '../../services/blockchainService';
+import { ethers } from 'ethers';
 
 export class NetworkManager extends EventEmitter {
   constructor() {
@@ -12,6 +13,7 @@ export class NetworkManager extends EventEmitter {
     this.networks = {};
     this.provider = null;
     this.isInitialized = false;
+    this.networkMonitoringInterval = null;
   }
 
   /**
@@ -286,24 +288,95 @@ export class NetworkManager extends EventEmitter {
       }
 
       const startTime = Date.now();
+      
+      // 1. 获取网络基本信息
       const networkInfo = await provider.getNetwork();
+      
+      // 2. 获取最新区块
+      const latestBlock = await provider.getBlock('latest');
+      
+      // 3. 计算网络延迟
       const responseTime = Date.now() - startTime;
-
-      return {
+      
+      // 4. 获取Gas价格
+      const feeData = await provider.getFeeData();
+      
+      // 5. 检查节点同步状态（如果支持）
+      let isSyncing = false;
+      try {
+        // 这是一个非标准方法，不是所有提供商都支持
+        const syncStatus = await provider.send('eth_syncing', []);
+        isSyncing = syncStatus !== false;
+      } catch (error) {
+        console.log('不支持eth_syncing方法:', error.message);
+      }
+      
+      // 构建完整的网络状态信息
+      const statusInfo = {
         networkId: targetNetworkId,
         network,
         connected: true,
-        responseTime,
+        latency: responseTime,
         chainId: networkInfo.chainId,
-        name: networkInfo.name
+        name: networkInfo.name,
+        blockHeight: latestBlock ? latestBlock.number : null,
+        blockTime: latestBlock ? latestBlock.timestamp : null,
+        gasPrice: feeData.gasPrice ? ethers.utils.formatUnits(feeData.gasPrice, 'gwei') : null,
+        maxFeePerGas: feeData.maxFeePerGas ? ethers.utils.formatUnits(feeData.maxFeePerGas, 'gwei') : null,
+        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ? ethers.utils.formatUnits(feeData.maxPriorityFeePerGas, 'gwei') : null,
+        isSyncing,
+        lastChecked: Date.now()
       };
+      
+      // 触发网络状态更新事件
+      this.emit('networkStatusUpdated', statusInfo);
+      
+      return statusInfo;
     } catch (error) {
-      return {
+      const errorInfo = {
         networkId: networkId || this.currentNetwork,
         network: this.networks[networkId || this.currentNetwork],
         connected: false,
-        error: error.message
+        error: error.message,
+        lastChecked: Date.now()
       };
+      
+      // 触发网络错误事件
+      this.emit('networkError', errorInfo);
+      
+      return errorInfo;
+    }
+  }
+
+  /**
+   * 启动网络状态监控
+   * @param {number} interval - 监控间隔（毫秒）
+   */
+  startNetworkMonitoring(interval = 30000) {
+    // 清除现有的监控定时器
+    if (this.networkMonitoringInterval) {
+      clearInterval(this.networkMonitoringInterval);
+    }
+    
+    // 立即执行一次检查
+    this.checkNetworkStatus();
+    
+    // 设置定期检查
+    this.networkMonitoringInterval = setInterval(() => {
+      this.checkNetworkStatus();
+    }, interval);
+    
+    this.emit('networkMonitoringStarted', { interval });
+  }
+  
+  /**
+   * 停止网络状态监控
+   */
+  stopNetworkMonitoring() {
+    if (this.networkMonitoringInterval) {
+      clearInterval(this.networkMonitoringInterval);
+      this.networkMonitoringInterval = null;
+      this.emit('networkMonitoringStopped');
     }
   }
 

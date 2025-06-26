@@ -12,9 +12,13 @@ import {
   SearchOutlined,
   InfoCircleOutlined,
   LoadingOutlined,
-  UpOutlined
+  UpOutlined,
+  RocketOutlined,
+  StopOutlined,
+  CloseOutlined,
+  WarningOutlined
 } from '@ant-design/icons';
-import { Tooltip, Badge, Spin } from 'antd';
+import { Tooltip, Badge, Spin, Popconfirm, Modal, message } from 'antd';
 
 /**
  * 交易列表组件 - 显示交易记录并支持过滤和查看详情
@@ -23,19 +27,31 @@ import { Tooltip, Badge, Spin } from 'antd';
  * @param {boolean} loading - 是否正在加载数据
  * @param {Function} onViewDetails - 查看交易详情的回调
  * @param {string} networkExplorerUrl - 区块浏览器URL前缀
+ * @param {Function} onSpeedUp - 交易加速回调
+ * @param {Function} onCancel - 交易取消回调
+ * @param {Function} onFilterByToken - 按代币过滤回调
  * @returns {JSX.Element}
  */
 const TransactionList = ({ 
   transactions = [], 
   loading = false,
   onViewDetails,
-  networkExplorerUrl = 'https://etherscan.io/tx/'
+  networkExplorerUrl = 'https://etherscan.io/tx/',
+  onSpeedUp,
+  onCancel,
+  onFilterByToken
 }) => {
   const [filter, setFilter] = useState('all'); // all, sent, received, swap, pending, failed
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [pageSize, setPageSize] = useState(10); // 每页显示的交易数
   const [currentPage, setCurrentPage] = useState(1); // 当前页码
   const [loadingMore, setLoadingMore] = useState(false); // 加载更多状态
+  const [tokenFilter, setTokenFilter] = useState(null); // 代币过滤
+  const [speedingUp, setSpeedingUp] = useState(false); // 加速中状态
+  const [cancelling, setCancelling] = useState(false); // 取消中状态
+  const [selectedTx, setSelectedTx] = useState(null); // 选中的交易
+  const [confirmModalVisible, setConfirmModalVisible] = useState(false); // 确认模态框
+  const [confirmAction, setConfirmAction] = useState(null); // 确认操作类型
   
   // 交易类型图标映射
   const typeIcons = {
@@ -49,14 +65,18 @@ const TransactionList = ({
   const statusIcons = {
     confirmed: <CheckCircleOutlined className="text-green-500" />,
     pending: <ClockCircleOutlined className="text-yellow-500" />,
-    failed: <ExclamationCircleOutlined className="text-red-500" />
+    failed: <ExclamationCircleOutlined className="text-red-500" />,
+    cancelled: <StopOutlined className="text-red-500" />,
+    replaced: <RocketOutlined className="text-blue-500" />
   };
   
   // 状态描述映射
   const statusText = {
     confirmed: '已确认',
     pending: '处理中',
-    failed: '失败'
+    failed: '失败',
+    cancelled: '已取消',
+    replaced: '已替换'
   };
   
   // 格式化时间戳为相对时间
@@ -85,10 +105,23 @@ const TransactionList = ({
   
   // 过滤交易
   const filteredTransactions = transactions.filter(tx => {
-    if (filter === 'all') return true;
-    if (filter === 'pending') return tx.status === 'pending';
-    if (filter === 'failed') return tx.status === 'failed';
-    return tx.type === filter;
+    // 首先按状态/类型过滤
+    if (filter === 'all') {
+      // 不过滤
+    } else if (filter === 'pending') {
+      if (tx.status !== 'pending') return false;
+    } else if (filter === 'failed') {
+      if (tx.status !== 'failed' && tx.status !== 'cancelled') return false;
+    } else {
+      if (tx.type !== filter) return false;
+    }
+    
+    // 然后按代币过滤
+    if (tokenFilter) {
+      if (tx.tokenAddress !== tokenFilter) return false;
+    }
+    
+    return true;
   });
   
   // 分页处理
@@ -115,6 +148,60 @@ const TransactionList = ({
 
   // 获取待处理交易数量
   const pendingCount = transactions.filter(tx => tx.status === 'pending').length;
+  
+  // 处理交易加速
+  const handleSpeedUp = (tx) => {
+    setSelectedTx(tx);
+    setConfirmAction('speedup');
+    setConfirmModalVisible(true);
+  };
+  
+  // 处理交易取消
+  const handleCancel = (tx) => {
+    setSelectedTx(tx);
+    setConfirmAction('cancel');
+    setConfirmModalVisible(true);
+  };
+  
+  // 确认操作
+  const handleConfirmAction = async () => {
+    if (!selectedTx) return;
+    
+    try {
+      if (confirmAction === 'speedup') {
+        setSpeedingUp(true);
+        await onSpeedUp(selectedTx.hash);
+        message.success('交易加速请求已提交');
+      } else if (confirmAction === 'cancel') {
+        setCancelling(true);
+        await onCancel(selectedTx.hash);
+        message.success('交易取消请求已提交');
+      }
+    } catch (error) {
+      message.error(error.message || '操作失败');
+    } finally {
+      setSpeedingUp(false);
+      setCancelling(false);
+      setConfirmModalVisible(false);
+      setSelectedTx(null);
+    }
+  };
+  
+  // 处理按代币过滤
+  const handleFilterByToken = (tokenAddress) => {
+    if (tokenFilter === tokenAddress) {
+      // 如果已经选择了该代币，则取消过滤
+      setTokenFilter(null);
+      if (onFilterByToken) {
+        onFilterByToken(null);
+      }
+    } else {
+      setTokenFilter(tokenAddress);
+      if (onFilterByToken) {
+        onFilterByToken(tokenAddress);
+      }
+    }
+  };
   
   return (
     <div className="space-y-4">
@@ -177,6 +264,20 @@ const TransactionList = ({
         </div>
       </div>
       
+      {/* 代币过滤标签 */}
+      {tokenFilter && (
+        <div className="flex items-center">
+          <span className="text-sm text-gray-500 mr-2">按代币过滤:</span>
+          <div 
+            className="flex items-center bg-blue-50 text-blue-600 px-2 py-1 rounded-full text-xs cursor-pointer hover:bg-blue-100"
+            onClick={() => handleFilterByToken(null)}
+          >
+            {tokenFilter === 'ETH' ? 'ETH' : `代币 (${formatAddress(tokenFilter)})`}
+            <CloseOutlined className="ml-1" />
+          </div>
+        </div>
+      )}
+      
       {/* 交易列表 */}
       {loading && paginatedTransactions.length === 0 ? (
         <div className="flex justify-center items-center py-12">
@@ -188,7 +289,6 @@ const TransactionList = ({
             {paginatedTransactions.map((tx) => (
               <div 
                 key={tx.hash}
-                onClick={() => onViewDetails && onViewDetails(tx)}
                 className="group bg-white hover:bg-gray-50 rounded-xl border border-gray-200 p-3 cursor-pointer transition-colors"
               >
                 <div className="flex items-start">
@@ -198,7 +298,7 @@ const TransactionList = ({
                   </div>
                   
                   {/* 交易内容 */}
-                  <div className="flex-1">
+                  <div className="flex-1" onClick={() => onViewDetails && onViewDetails(tx)}>
                     <div className="flex justify-between">
                       <div className="flex items-center">
                         <span className="font-medium">
@@ -206,6 +306,19 @@ const TransactionList = ({
                            tx.type === 'receive' ? '接收' : 
                            tx.type === 'swap' ? '兑换' : '合约交互'}
                         </span>
+                        
+                        {/* 代币标签 */}
+                        {tx.tokenAddress && tx.tokenAddress !== 'ETH' && (
+                          <span 
+                            className="ml-2 px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full text-xs cursor-pointer hover:bg-blue-100"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleFilterByToken(tx.tokenAddress);
+                            }}
+                          >
+                            {tx.symbol || 'Token'}
+                          </span>
+                        )}
                         
                         {/* 交易状态标签 */}
                         <Tooltip title={tx.error || statusText[tx.status]}>
@@ -216,6 +329,10 @@ const TransactionList = ({
                               <Badge status="success" text={<span className="text-xs text-green-500">已确认 
                                 {tx.confirmations > 1 ? ` (${tx.confirmations})` : ''}
                               </span>} />
+                            ) : tx.status === 'cancelled' ? (
+                              <Badge status="error" text={<span className="text-xs text-red-500">已取消</span>} />
+                            ) : tx.status === 'replaced' ? (
+                              <Badge status="warning" text={<span className="text-xs text-blue-500">已替换</span>} />
                             ) : (
                               <Badge status="error" text={<span className="text-xs text-red-500">失败</span>} />
                             )}
@@ -243,98 +360,208 @@ const TransactionList = ({
                     </div>
                   </div>
                   
-                  {/* 查看详情按钮 */}
-                  <div className="ml-2 text-gray-400 group-hover:text-blue-500 transition-colors">
+                  {/* 操作按钮 */}
+                  <div className="ml-2 flex items-center space-x-1">
+                    {/* 待处理交易可以加速或取消 */}
+                    {tx.status === 'pending' && (
+                      <>
+                        <Tooltip title="加速交易">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSpeedUp(tx);
+                            }}
+                            className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-full transition-colors"
+                          >
+                            <RocketOutlined />
+                          </button>
+                        </Tooltip>
+                        
+                        <Tooltip title="取消交易">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCancel(tx);
+                            }}
+                            className="p-1.5 text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                          >
+                            <StopOutlined />
+                          </button>
+                        </Tooltip>
+                      </>
+                    )}
+                    
+                    {/* 查看详情按钮 */}
                     <Tooltip title="查看详情">
-                      <InfoCircleOutlined />
+                      <button 
+                        onClick={() => onViewDetails && onViewDetails(tx)}
+                        className="p-1.5 text-gray-400 group-hover:text-blue-500 transition-colors"
+                      >
+                        <InfoCircleOutlined />
+                      </button>
                     </Tooltip>
                   </div>
                 </div>
                 
-                {/* 交易信息 */}
-                <div className="mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500 grid grid-cols-2 gap-x-2 gap-y-1">
-                  {/* Gas费用 */}
-                  {(tx.gasPrice || tx.gasLimit) && (
-                    <>
-                      <span>Gas:</span>
-                      <span className="font-medium">{tx.gasPrice || '-'} Gwei</span>
-                    </>
-                  )}
-                  
-                  {/* 区块号 */}
-                  {tx.blockNumber && (
-                    <>
-                      <span>区块:</span>
-                      <span className="font-medium">#{tx.blockNumber}</span>
-                    </>
-                  )}
-                  
-                  {/* 交易哈希 */}
-                  <span>交易哈希:</span>
-                  <a 
-                    href={`${networkExplorerUrl}${tx.hash}`} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="font-medium text-blue-500 hover:text-blue-700 truncate"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {formatAddress(tx.hash)}
-                  </a>
-                </div>
+                {/* 如果是被替换的交易，显示替换信息 */}
+                {tx.replacedBy && (
+                  <div className="mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500">
+                    <span>
+                      {tx.speedUp ? '已被加速交易替换' : '已被取消交易替换'}: 
+                      <a 
+                        href={`${networkExplorerUrl}${tx.replacedBy}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-1 text-blue-500 hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {formatAddress(tx.replacedBy)}
+                      </a>
+                    </span>
+                  </div>
+                )}
+                
+                {/* 如果是替换交易，显示原交易信息 */}
+                {tx.originalTx && (
+                  <div className="mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500">
+                    <span>
+                      {tx.isSpeedUp ? '加速交易，替换' : '取消交易，替换'}: 
+                      <a 
+                        href={`${networkExplorerUrl}${tx.originalTx}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-1 text-blue-500 hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {formatAddress(tx.originalTx)}
+                      </a>
+                    </span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
           
           {/* 加载更多按钮 */}
           {hasMoreTransactions && (
-            <div className="mt-4 flex justify-center">
+            <div className="mt-4 text-center">
               <button
                 onClick={loadMoreTransactions}
                 disabled={loadingMore}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-700 flex items-center space-x-1 transition-colors"
+                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50"
               >
                 {loadingMore ? (
-                  <>
-                    <LoadingOutlined className="mr-1" />
-                    <span>加载中...</span>
-                  </>
+                  <LoadingOutlined className="mr-2" />
                 ) : (
-                  <>
-                    <DownOutlined className="mr-1" />
-                    <span>加载更多</span>
-                  </>
+                  <DownOutlined className="mr-2" />
                 )}
-              </button>
-            </div>
-          )}
-          
-          {/* 回到顶部按钮 - 当有多页数据时显示 */}
-          {currentPage > 1 && (
-            <div className="fixed bottom-6 right-6">
-              <button
-                onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-                className="p-2 bg-white shadow-md rounded-full text-gray-600 hover:text-blue-600 transition-colors"
-                title="回到顶部"
-              >
-                <UpOutlined />
+                加载更多
               </button>
             </div>
           )}
         </div>
       ) : (
-        <div className="py-8 text-center text-gray-500">
+        <div className="text-center py-12 text-gray-500">
           <p>暂无交易记录</p>
+          {filter !== 'all' && (
+            <button
+              onClick={() => setFilter('all')}
+              className="mt-2 text-blue-500 hover:underline"
+            >
+              查看全部交易
+            </button>
+          )}
         </div>
       )}
+      
+      {/* 交易操作确认模态框 */}
+      <Modal
+        title={confirmAction === 'speedup' ? '加速交易' : '取消交易'}
+        open={confirmModalVisible}
+        onCancel={() => {
+          setConfirmModalVisible(false);
+          setSelectedTx(null);
+        }}
+        onOk={handleConfirmAction}
+        confirmLoading={speedingUp || cancelling}
+        okText={confirmAction === 'speedup' ? '加速' : '取消交易'}
+        cancelText="关闭"
+      >
+        {selectedTx && (
+          <div className="space-y-4">
+            <div className="p-3 bg-yellow-50 border-l-4 border-yellow-400 rounded-lg">
+              <div className="flex items-start">
+                <WarningOutlined className="text-yellow-500 text-lg mr-2 mt-0.5" />
+                <p className="text-sm text-gray-700">
+                  {confirmAction === 'speedup' ? (
+                    '加速交易将通过提高Gas价格来尝试更快地确认您的交易。这将产生额外的交易费用。'
+                  ) : (
+                    '取消交易将尝试使用相同的nonce发送一个新交易，以替换原始交易。这将产生额外的交易费用。'
+                  )}
+                </p>
+              </div>
+            </div>
+            
+            <div className="space-y-2">
+              <div className="flex justify-between px-2 py-1.5">
+                <span className="text-gray-500">交易哈希:</span>
+                <span className="font-medium font-mono">{formatAddress(selectedTx.hash)}</span>
+              </div>
+              <div className="flex justify-between px-2 py-1.5">
+                <span className="text-gray-500">接收地址:</span>
+                <span className="font-medium font-mono">{formatAddress(selectedTx.to)}</span>
+              </div>
+              <div className="flex justify-between px-2 py-1.5">
+                <span className="text-gray-500">金额:</span>
+                <span className="font-medium">{selectedTx.amount} {selectedTx.symbol || 'ETH'}</span>
+              </div>
+              <div className="flex justify-between px-2 py-1.5">
+                <span className="text-gray-500">Gas价格:</span>
+                <span className="font-medium">{selectedTx.gasPrice} Gwei</span>
+              </div>
+              <div className="flex justify-between px-2 py-1.5">
+                <span className="text-gray-500">新Gas价格:</span>
+                <span className="font-medium text-blue-500">
+                  {confirmAction === 'speedup' ? 
+                    `约 ${(parseFloat(selectedTx.gasPrice) * 1.3).toFixed(2)} Gwei (+30%)` : 
+                    `约 ${(parseFloat(selectedTx.gasPrice) * 1.3).toFixed(2)} Gwei (+30%)`}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };
 
 TransactionList.propTypes = {
-  transactions: PropTypes.array,
+  transactions: PropTypes.arrayOf(
+    PropTypes.shape({
+      hash: PropTypes.string.isRequired,
+      from: PropTypes.string.isRequired,
+      to: PropTypes.string.isRequired,
+      value: PropTypes.string,
+      amount: PropTypes.string,
+      symbol: PropTypes.string,
+      type: PropTypes.string,
+      status: PropTypes.string,
+      timestamp: PropTypes.number,
+      gasPrice: PropTypes.string,
+      gasLimit: PropTypes.string,
+      tokenAddress: PropTypes.string,
+      replacedBy: PropTypes.string,
+      originalTx: PropTypes.string,
+      isSpeedUp: PropTypes.bool,
+      isCancelTx: PropTypes.bool
+    })
+  ),
   loading: PropTypes.bool,
   onViewDetails: PropTypes.func,
-  networkExplorerUrl: PropTypes.string
+  networkExplorerUrl: PropTypes.string,
+  onSpeedUp: PropTypes.func,
+  onCancel: PropTypes.func,
+  onFilterByToken: PropTypes.func
 };
 
 export default TransactionList; 

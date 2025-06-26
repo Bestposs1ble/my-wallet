@@ -51,6 +51,15 @@ export const WalletProvider = ({ children }) => {
   const [tokens, setTokens] = useState([]); // 当前网络的代币列表
   const [selectedToken, setSelectedToken] = useState(null); // 当前选中的代币
   
+  // 网络状态监测
+  const [networkStatus, setNetworkStatus] = useState({
+    isConnected: true,
+    latency: 0,
+    blockHeight: 0,
+    lastChecked: Date.now()
+  });
+  const networkCheckInterval = useRef(null);
+  
   // 锁定钱包
   const lock = () => {
     setIsLocked(true);
@@ -325,6 +334,28 @@ export const WalletProvider = ({ children }) => {
     }
     setRequestModalVisible(false);
     setDappRequest(null);
+  }, []);
+  
+  /**
+   * 注册dApp请求处理器
+   * @param {string} method 请求方法
+   * @param {Function} handler 处理函数
+   * @returns {Function} 取消注册的函数
+   */
+  const registerDappRequestHandler = useCallback((method, handler) => {
+    if (!method || typeof handler !== 'function') {
+      console.error('注册dApp请求处理器失败：无效的参数');
+      return () => {};
+    }
+    
+    // 将处理器添加到映射表
+    const handlerKey = `method:${method}`;
+    dappRequestHandlers.current.set(handlerKey, { handler });
+    
+    // 返回取消注册的函数
+    return () => {
+      dappRequestHandlers.current.delete(handlerKey);
+    };
   }, []);
   
   // 签名消息
@@ -744,7 +775,7 @@ export const WalletProvider = ({ children }) => {
     setLoading(true);
     try {
       // 从私钥创建钱包
-      const wallet = ethersHelper.createWalletFromPrivateKey(privateKey);
+      const wallet = new ethers.Wallet(privateKey);
       const walletData = {
         name,
         address: wallet.address,
@@ -1164,28 +1195,53 @@ export const WalletProvider = ({ children }) => {
 
   // 删除钱包
   const deleteWallet = (index) => {
-    if (index >= 0 && index < wallets.length) {
-      const newWallets = wallets.filter((_, i) => i !== index);
-      setWallets(newWallets);
-      
-      // 如果删除的是当前钱包，则切换到第一个钱包
-      if (index === currentWalletIndex) {
-        setCurrentWalletIndex(0);
-        storageService.saveCurrentWalletIndex(0);
-      } 
-      // 如果删除的钱包索引小于当前索引，需要调整当前索引
-      else if (index < currentWalletIndex) {
-        const newIndex = currentWalletIndex - 1;
-        setCurrentWalletIndex(newIndex);
-        storageService.saveCurrentWalletIndex(newIndex);
+    try {
+      if (index < 0 || index >= wallets.length) {
+        throw new Error('无效的钱包索引');
       }
       
-      storageService.saveWallets(newWallets, password);
-      setError(null);
+      // 不允许删除最后一个钱包
+      if (wallets.length === 1) {
+        throw new Error('无法删除最后一个钱包账户');
+      }
+
+      // 创建新的钱包数组，排除要删除的钱包
+      const updatedWallets = wallets.filter((_, i) => i !== index);
+      
+      // 更新当前钱包索引
+      let newIndex = currentWalletIndex;
+      if (index === currentWalletIndex) {
+        // 如果删除的是当前钱包，切换到第一个钱包
+        newIndex = 0;
+      } else if (index < currentWalletIndex) {
+        // 如果删除的钱包索引小于当前钱包索引，当前索引需要减1
+        newIndex = currentWalletIndex - 1;
+      }
+      
+      // 更新状态
+      setWallets(updatedWallets);
+      setCurrentWalletIndex(newIndex);
+      
+      // 保存到存储
+      storageService.saveWalletsToDB(updatedWallets, password);
+      storageService.setCurrentWalletIndex(newIndex);
+      
+      // 触发事件
+      emitter.current.emit(EVENTS.ACCOUNT_CHANGED, {
+        address: updatedWallets[newIndex].address,
+        index: newIndex
+      });
+      
+      // 重新获取余额
+      setTimeout(() => fetchBalances(updatedWallets), 500);
+      
+      message.success('账户已删除');
       return true;
+    } catch (error) {
+      console.error('删除钱包失败:', error);
+      message.error(error.message || '删除钱包失败');
+      return false;
     }
-    setError('无效的钱包索引');
-    return false;
   };
 
   // 重置钱包（清除所有钱包数据）
@@ -1506,7 +1562,482 @@ export const WalletProvider = ({ children }) => {
     }
   }, [wallets, currentWalletIndex, isLocked, currentNetwork]);
 
-  // 上下文值
+  // 导出单个账户的私钥
+  const exportPrivateKey = async (walletIndex, inputPassword) => {
+    try {
+      // 验证密码
+      if (!inputPassword) {
+        throw new Error('请输入密码');
+      }
+      
+      // 验证密码是否正确
+      if (inputPassword !== password) {
+        throw new Error('密码错误');
+      }
+      
+      // 验证钱包索引
+      if (walletIndex < 0 || walletIndex >= wallets.length) {
+        throw new Error('无效的钱包索引');
+      }
+      
+      const targetWallet = wallets[walletIndex];
+      
+      // 获取私钥
+      let privateKey;
+      if (targetWallet.fromPrivateKey) {
+        // 如果是通过私钥导入的钱包，直接返回存储的私钥
+        privateKey = targetWallet.privateKey;
+      } else if (masterMnemonic) {
+        // 如果是通过助记词派生的钱包，从助记词派生私钥
+        const path = targetWallet.path || `m/44'/60'/0'/0/${targetWallet.index || 0}`;
+        const wallet = ethersHelper.createWalletFromMnemonic(masterMnemonic, path);
+        privateKey = wallet.privateKey;
+      } else {
+        throw new Error('无法导出私钥，助记词不可用');
+      }
+      
+      return privateKey;
+    } catch (error) {
+      console.error('导出私钥失败:', error);
+      throw error;
+    }
+  };
+
+  // 获取代币价格信息
+  const fetchTokenPrices = async (tokenAddresses = []) => {
+    try {
+      if (!tokenAddresses || tokenAddresses.length === 0) {
+        // 如果没有提供代币地址，则获取所有代币的价格
+        tokenAddresses = tokens.map(token => token.address);
+      }
+      
+      // 过滤掉ETH，因为我们会单独处理
+      tokenAddresses = tokenAddresses.filter(addr => addr.toLowerCase() !== '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee');
+      
+      if (tokenAddresses.length === 0) {
+        return {};
+      }
+      
+      // 调用区块链服务获取代币价格
+      const prices = await blockchainService.getTokenPrices(tokenAddresses);
+      return prices;
+    } catch (error) {
+      console.error('获取代币价格失败:', error);
+      return {};
+    }
+  };
+
+  // 更新代币余额和价格信息
+  const updateTokensWithPrices = async () => {
+    try {
+      // 首先获取代币余额
+      await fetchTokenBalances();
+      
+      // 获取所有代币的价格
+      const tokenAddresses = tokens.map(token => token.address);
+      const prices = await fetchTokenPrices(tokenAddresses);
+      
+      // 更新代币列表，添加价格信息
+      const updatedTokens = tokens.map(token => {
+        const price = prices[token.address.toLowerCase()];
+        if (price) {
+          return {
+            ...token,
+            price: price.usd,
+            priceChangePercentage24h: price.usd_24h_change
+          };
+        }
+        return token;
+      });
+      
+      setTokens(updatedTokens);
+      
+      // 更新代币余额的美元价值
+      const currentWallet = getCurrentWallet();
+      if (currentWallet && tokenBalances[currentWallet.address]) {
+        const walletTokens = tokenBalances[currentWallet.address];
+        const updatedWalletTokens = {};
+        
+        for (const [tokenAddr, tokenData] of Object.entries(walletTokens)) {
+          const price = prices[tokenAddr.toLowerCase()];
+          if (price) {
+            updatedWalletTokens[tokenAddr] = {
+              ...tokenData,
+              usdBalance: parseFloat(tokenData.balance) * price.usd
+            };
+          } else {
+            updatedWalletTokens[tokenAddr] = tokenData;
+          }
+        }
+        
+        const newTokenBalances = {
+          ...tokenBalances,
+          [currentWallet.address]: updatedWalletTokens
+        };
+        
+        setTokenBalances(newTokenBalances);
+      }
+      
+      // 更新ETH余额的美元价值
+      try {
+        const ethPrice = await blockchainService.getEthPrice();
+        if (ethPrice) {
+          // 更新所有钱包的ETH美元价值
+          const updatedAccountBalances = {};
+          
+          for (const [addr, balance] of Object.entries(accountBalances)) {
+            updatedAccountBalances[addr] = {
+              balance,
+              usdBalance: parseFloat(balance) * ethPrice.usd
+            };
+          }
+          
+          setAccountBalances(updatedAccountBalances);
+        }
+      } catch (ethPriceError) {
+        console.error('获取ETH价格失败:', ethPriceError);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('更新代币价格失败:', error);
+      return false;
+    }
+  };
+
+  // 定期更新代币价格
+  useEffect(() => {
+    if (!isLocked && wallets.length > 0) {
+      // 初始更新
+      updateTokensWithPrices();
+      
+      // 设置定时更新，每5分钟更新一次
+      const priceUpdateInterval = setInterval(() => {
+        updateTokensWithPrices();
+      }, 5 * 60 * 1000);
+      
+      return () => clearInterval(priceUpdateInterval);
+    }
+  }, [isLocked, wallets.length, currentNetwork]);
+
+  // 检查网络状态
+  const checkNetworkStatus = async () => {
+    try {
+      const startTime = Date.now();
+      
+      // 获取当前区块号来测试网络连接
+      const blockNumber = await provider.getBlockNumber();
+      
+      // 计算延迟
+      const endTime = Date.now();
+      const latency = endTime - startTime;
+      
+      setNetworkStatus({
+        isConnected: true,
+        latency,
+        blockHeight: blockNumber,
+        lastChecked: endTime
+      });
+      
+      return {
+        isConnected: true,
+        latency,
+        blockHeight: blockNumber,
+        lastChecked: endTime
+      };
+    } catch (error) {
+      console.error('检查网络状态失败:', error);
+      
+      setNetworkStatus({
+        isConnected: false,
+        latency: 0,
+        blockHeight: networkStatus.blockHeight,
+        lastChecked: Date.now()
+      });
+      
+      return {
+        isConnected: false,
+        latency: 0,
+        blockHeight: networkStatus.blockHeight,
+        lastChecked: Date.now()
+      };
+    }
+  };
+
+  // 定期检查网络状态
+  useEffect(() => {
+    if (provider && !isLocked) {
+      // 初始检查
+      checkNetworkStatus();
+      
+      // 设置定时检查，每30秒检查一次
+      networkCheckInterval.current = setInterval(() => {
+        checkNetworkStatus();
+      }, 30 * 1000);
+      
+      return () => {
+        if (networkCheckInterval.current) {
+          clearInterval(networkCheckInterval.current);
+        }
+      };
+    }
+  }, [provider, isLocked, currentNetwork]);
+
+  // 监听网络变化
+  useEffect(() => {
+    if (provider) {
+      const handleNetworkChange = (newNetwork) => {
+        console.log('网络变化:', newNetwork);
+        
+        // 更新网络状态
+        checkNetworkStatus();
+        
+        // 触发网络变化事件
+        emitter.current.emit(EVENTS.NETWORK_CHANGED, newNetwork);
+      };
+      
+      // 监听网络变化事件
+      provider.on('network', handleNetworkChange);
+      
+      return () => {
+        provider.off('network', handleNetworkChange);
+      };
+    }
+  }, [provider]);
+
+  /**
+   * 加速交易 - 通过增加gas价格重新发送交易
+   * @param {string} txHash - 要加速的交易哈希
+   * @param {number} speedUpPercentage - 加速百分比，默认为30%
+   * @returns {Promise<Object>} 新交易的结果
+   */
+  const speedUpTransaction = async (txHash, speedUpPercentage = 30) => {
+    try {
+      setLoading(true);
+      
+      // 获取原始交易
+      const tx = await blockchainService.getTransaction(txHash);
+      if (!tx) {
+        throw new Error('交易不存在');
+      }
+      
+      // 检查交易是否已确认
+      const receipt = await blockchainService.getTransactionReceipt(txHash);
+      if (receipt && receipt.confirmations > 0) {
+        throw new Error('交易已确认，无法加速');
+      }
+      
+      // 获取当前钱包
+      const currentWallet = getCurrentWallet();
+      if (!currentWallet) {
+        throw new Error('未找到当前钱包');
+      }
+      
+      // 获取钱包实例
+      const wallet = await ethersHelper.getWalletWithProvider(
+        masterMnemonic, 
+        currentWallet.path || `m/44'/60'/0'/0/${currentWallet.index || 0}`,
+        provider
+      );
+      
+      // 计算新的gas价格 (增加指定百分比)
+      const originalGasPrice = tx.gasPrice;
+      const increaseFactor = 1 + (speedUpPercentage / 100);
+      const newGasPrice = originalGasPrice.mul(Math.floor(increaseFactor * 100)).div(100);
+      
+      // 创建新的交易对象
+      const newTx = {
+        to: tx.to,
+        from: tx.from,
+        nonce: tx.nonce, // 使用相同的nonce以替换原交易
+        value: tx.value,
+        data: tx.data,
+        gasLimit: tx.gasLimit,
+        gasPrice: newGasPrice,
+        chainId: tx.chainId
+      };
+      
+      // 发送交易
+      const response = await wallet.sendTransaction(newTx);
+      
+      // 更新待处理交易列表
+      const updatedPendingTxs = pendingTransactions.map(pendingTx => {
+        if (pendingTx.hash === txHash) {
+          return {
+            ...pendingTx,
+            replacedBy: response.hash,
+            status: 'replaced',
+            speedUp: true
+          };
+        }
+        return pendingTx;
+      });
+      
+      // 添加新的加速交易
+      const newPendingTx = {
+        hash: response.hash,
+        from: response.from,
+        to: response.to,
+        value: ethers.utils.formatEther(response.value),
+        nonce: response.nonce,
+        gasPrice: ethers.utils.formatUnits(response.gasPrice, 'gwei'),
+        gasLimit: response.gasLimit.toString(),
+        timestamp: Date.now(),
+        status: 'pending',
+        isSpeedUp: true,
+        originalTx: txHash
+      };
+      
+      setPendingTransactions([...updatedPendingTxs, newPendingTx]);
+      
+      // 保存到存储
+      storageService.savePendingTransactions([...updatedPendingTxs, newPendingTx]);
+      
+      // 触发事件
+      emitter.current.emit(EVENTS.TRANSACTION_UPDATED, {
+        action: 'speedup',
+        originalTxHash: txHash,
+        newTxHash: response.hash
+      });
+      
+      setLoading(false);
+      return response;
+    } catch (error) {
+      console.error('加速交易失败:', error);
+      setError(error.message || '加速交易失败');
+      setLoading(false);
+      throw error;
+    }
+  };
+
+  /**
+   * 取消交易 - 通过发送0值交易到自己的地址来替换交易
+   * @param {string} txHash - 要取消的交易哈希
+   * @param {number} cancelPercentage - gas价格增加百分比，默认为30%
+   * @returns {Promise<Object>} 新交易的结果
+   */
+  const cancelTransaction = async (txHash, cancelPercentage = 30) => {
+    try {
+      setLoading(true);
+      
+      // 获取原始交易
+      const tx = await blockchainService.getTransaction(txHash);
+      if (!tx) {
+        throw new Error('交易不存在');
+      }
+      
+      // 检查交易是否已确认
+      const receipt = await blockchainService.getTransactionReceipt(txHash);
+      if (receipt && receipt.confirmations > 0) {
+        throw new Error('交易已确认，无法取消');
+      }
+      
+      // 获取当前钱包
+      const currentWallet = getCurrentWallet();
+      if (!currentWallet) {
+        throw new Error('未找到当前钱包');
+      }
+      
+      // 获取钱包实例
+      const wallet = await ethersHelper.getWalletWithProvider(
+        masterMnemonic, 
+        currentWallet.path || `m/44'/60'/0'/0/${currentWallet.index || 0}`,
+        provider
+      );
+      
+      // 计算新的gas价格 (增加指定百分比)
+      const originalGasPrice = tx.gasPrice;
+      const increaseFactor = 1 + (cancelPercentage / 100);
+      const newGasPrice = originalGasPrice.mul(Math.floor(increaseFactor * 100)).div(100);
+      
+      // 创建取消交易 (发送0 ETH到自己的地址)
+      const cancelTx = {
+        to: wallet.address, // 发送给自己
+        from: wallet.address,
+        nonce: tx.nonce, // 使用相同的nonce以替换原交易
+        value: ethers.constants.Zero, // 0 ETH
+        gasLimit: tx.gasLimit,
+        gasPrice: newGasPrice,
+        chainId: tx.chainId,
+        data: '0x' // 空数据
+      };
+      
+      // 发送交易
+      const response = await wallet.sendTransaction(cancelTx);
+      
+      // 更新待处理交易列表
+      const updatedPendingTxs = pendingTransactions.map(pendingTx => {
+        if (pendingTx.hash === txHash) {
+          return {
+            ...pendingTx,
+            replacedBy: response.hash,
+            status: 'cancelled',
+            cancelled: true
+          };
+        }
+        return pendingTx;
+      });
+      
+      // 添加新的取消交易
+      const newPendingTx = {
+        hash: response.hash,
+        from: response.from,
+        to: response.to,
+        value: '0',
+        nonce: response.nonce,
+        gasPrice: ethers.utils.formatUnits(response.gasPrice, 'gwei'),
+        gasLimit: response.gasLimit.toString(),
+        timestamp: Date.now(),
+        status: 'pending',
+        isCancelTx: true,
+        originalTx: txHash
+      };
+      
+      setPendingTransactions([...updatedPendingTxs, newPendingTx]);
+      
+      // 保存到存储
+      storageService.savePendingTransactions([...updatedPendingTxs, newPendingTx]);
+      
+      // 触发事件
+      emitter.current.emit(EVENTS.TRANSACTION_UPDATED, {
+        action: 'cancel',
+        originalTxHash: txHash,
+        newTxHash: response.hash
+      });
+      
+      setLoading(false);
+      return response;
+    } catch (error) {
+      console.error('取消交易失败:', error);
+      setError(error.message || '取消交易失败');
+      setLoading(false);
+      throw error;
+    }
+  };
+
+  /**
+   * 添加事件监听器
+   * @param {string} eventName 事件名称
+   * @param {Function} handler 处理函数
+   */
+  const on = useCallback((eventName, handler) => {
+    if (emitter.current) {
+      emitter.current.on(eventName, handler);
+    }
+  }, []);
+
+  /**
+   * 移除事件监听器
+   * @param {string} eventName 事件名称
+   * @param {Function} handler 处理函数
+   */
+  const off = useCallback((eventName, handler) => {
+    if (emitter.current) {
+      emitter.current.off(eventName, handler);
+    }
+  }, []);
+
+  // 返回上下文值
   const contextValue = {
     isInitialized,
     isLocked,
@@ -1516,23 +2047,23 @@ export const WalletProvider = ({ children }) => {
     currentNetwork,
     networks,
     provider,
-    accountBalances,
-    pendingTransactions,
     error,
     loading,
-    unlock,
+    accountBalances,
+    pendingTransactions,
+    dappRequest,
+    requestModalVisible,
+    tokenBalances,
+    tokens,
+    selectedToken,
+    networkStatus,
+    EVENTS,
     lock,
+    unlock,
     createHDWallet,
     importHDWalletByMnemonic,
     importWalletByPrivateKey,
     addDerivedAccount,
-    // dApp相关
-    dappRequest,
-    requestModalVisible,
-    approveDappRequest,
-    rejectDappRequest,
-    signMessage: walletSignMessage,
-    addToken,
     addMultipleDerivedAccounts,
     switchWallet,
     switchNetwork,
@@ -1545,20 +2076,23 @@ export const WalletProvider = ({ children }) => {
     deleteWallet,
     resetWallet,
     backupWallet,
-    // 代币相关
-    tokens,
-    tokenBalances,
-    selectedToken,
-    setSelectedToken,
+    addToken,
     removeToken,
     sendTokenTransaction,
+    setSelectedToken,
     getCurrentWalletTokenBalances,
     getTokenBalance,
-    fetchTokenBalances,
-    // 事件相关
-    EVENTS,
-    on: (event, callback) => emitter.current.on(event, callback),
-    off: (event, callback) => emitter.current.off(event, callback)
+    setDappRequest,
+    setRequestModalVisible,
+    registerDappRequestHandler,
+    exportPrivateKey,
+    fetchTokenPrices,
+    updateTokensWithPrices,
+    checkNetworkStatus,
+    speedUpTransaction,
+    cancelTransaction,
+    on,
+    off,
   };
 
   return (

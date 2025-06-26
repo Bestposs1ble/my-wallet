@@ -308,6 +308,128 @@ export class WalletManager extends EventEmitter {
       currentWallet: this.getCurrentWallet()
     };
   }
+
+  /**
+   * 删除钱包账户
+   * @param {number} index - 要删除的钱包索引
+   * @returns {Promise<boolean>} 操作结果
+   */
+  async deleteWallet(index) {
+    try {
+      if (index < 0 || index >= this.wallets.length) {
+        throw new Error('无效的钱包索引');
+      }
+
+      if (this.wallets.length === 1) {
+        throw new Error('不能删除唯一的钱包账户');
+      }
+
+      // 获取要删除的钱包信息
+      const walletToDelete = this.wallets[index];
+
+      // 从列表中移除
+      this.wallets = this.wallets.filter((_, i) => i !== index);
+
+      // 如果删除的是当前选中的钱包，则切换到第一个钱包
+      if (this.currentWalletIndex === index) {
+        this.currentWalletIndex = 0;
+        this.emit('currentWalletChanged', this.wallets[0]);
+      } else if (this.currentWalletIndex > index) {
+        // 如果删除的钱包索引小于当前钱包，则当前索引需要减1
+        this.currentWalletIndex--;
+      }
+
+      // 触发事件
+      this.emit('walletDeleted', walletToDelete);
+      this.emit('walletsChanged', this.wallets);
+
+      return true;
+    } catch (error) {
+      this.emit('error', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 导出钱包私钥
+   * @param {number} index - 钱包索引
+   * @param {string} password - 钱包密码（用于验证）
+   * @returns {Promise<string>} 私钥
+   */
+  async exportPrivateKey(index, password) {
+    try {
+      if (this.isLocked) {
+        throw new Error('钱包已锁定，请先解锁');
+      }
+
+      if (index < 0 || index >= this.wallets.length) {
+        throw new Error('无效的钱包索引');
+      }
+
+      const walletData = this.wallets[index];
+
+      // 如果是从私钥导入的钱包，直接返回存储的私钥
+      if (walletData.fromPrivateKey && walletData.privateKey) {
+        return walletData.privateKey;
+      }
+
+      // 如果是从助记词派生的钱包，需要从助记词派生私钥
+      if (!this.masterMnemonic) {
+        throw new Error('无法导出私钥，缺少主助记词');
+      }
+
+      const path = walletData.path || `m/44'/60'/0'/0/${walletData.index || 0}`;
+      const wallet = ethersHelper.createWalletFromMnemonic(this.masterMnemonic, path);
+      
+      // 记录导出私钥的操作
+      this.emit('privateKeyExported', { address: walletData.address, index });
+
+      return wallet.privateKey;
+    } catch (error) {
+      this.emit('error', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 重命名钱包账户
+   * @param {number} index - 钱包索引
+   * @param {string} newName - 新名称
+   * @returns {Promise<Object>} 更新后的钱包信息
+   */
+  async renameWallet(index, newName) {
+    try {
+      if (index < 0 || index >= this.wallets.length) {
+        throw new Error('无效的钱包索引');
+      }
+
+      if (!newName || newName.trim() === '') {
+        throw new Error('名称不能为空');
+      }
+
+      // 更新钱包名称
+      this.wallets[index] = {
+        ...this.wallets[index],
+        name: newName.trim()
+      };
+
+      const updatedWallet = this.wallets[index];
+
+      // 触发事件
+      this.emit('walletRenamed', { index, wallet: updatedWallet });
+      this.emit('walletsChanged', this.wallets);
+
+      // 如果是当前钱包，也触发当前钱包变更事件
+      if (index === this.currentWalletIndex) {
+        this.emit('currentWalletChanged', updatedWallet);
+      }
+
+      return updatedWallet;
+    } catch (error) {
+      this.emit('error', error);
+      throw error;
+    }
+  }
 }
 
 // 创建单例实例

@@ -412,6 +412,268 @@ export class TransactionManager extends EventEmitter {
       historyCount: this.transactionHistory.length
     };
   }
+
+  /**
+   * 加速交易 - 使用相同的nonce但更高的gas价格重新发送交易
+   * @param {string} txHash - 要加速的交易哈希
+   * @param {Object} wallet - 钱包实例
+   * @param {Object} provider - Provider 实例
+   * @param {number} gasMultiplier - gas价格倍数（默认1.1倍）
+   * @returns {Promise<Object>} 新交易结果
+   */
+  async speedUpTransaction(txHash, wallet, provider, gasMultiplier = 1.1) {
+    try {
+      // 获取原始交易
+      const pendingTx = this.pendingTransactions.get(txHash);
+      if (!pendingTx) {
+        // 尝试从历史记录中查找
+        const historyTx = this.transactionHistory.find(tx => tx.hash === txHash);
+        if (!historyTx || historyTx.status !== 'pending') {
+          throw new Error('未找到待处理交易或交易已确认');
+        }
+      }
+
+      // 获取原始交易详情
+      const tx = await provider.getTransaction(txHash);
+      if (!tx) {
+        throw new Error('无法获取交易详情');
+      }
+
+      // 检查交易是否已确认
+      if (tx.confirmations > 0) {
+        throw new Error('交易已确认，无法加速');
+      }
+
+      // 检查发送者是否匹配
+      if (tx.from.toLowerCase() !== wallet.address.toLowerCase()) {
+        throw new Error('只能加速自己发送的交易');
+      }
+
+      // 构建加速交易
+      const speedUpTx = {
+        to: tx.to,
+        data: tx.data,
+        value: tx.value,
+        nonce: tx.nonce, // 使用相同的nonce覆盖原交易
+      };
+
+      // 根据交易类型设置gas价格
+      if (tx.type === 2) { // EIP-1559
+        speedUpTx.type = 2;
+        speedUpTx.maxFeePerGas = tx.maxFeePerGas.mul(Math.floor(gasMultiplier * 100)).div(100);
+        speedUpTx.maxPriorityFeePerGas = tx.maxPriorityFeePerGas.mul(Math.floor(gasMultiplier * 100)).div(100);
+      } else {
+        speedUpTx.type = 0;
+        speedUpTx.gasPrice = tx.gasPrice.mul(Math.floor(gasMultiplier * 100)).div(100);
+      }
+
+      // 设置gasLimit，稍微增加一点以确保成功
+      speedUpTx.gasLimit = tx.gasLimit.mul(110).div(100);
+
+      // 发送加速交易
+      const connectedWallet = wallet.connect(provider);
+      const txResponse = await connectedWallet.sendTransaction(speedUpTx);
+
+      // 创建交易记录
+      const txRecord = {
+        hash: txResponse.hash,
+        from: wallet.address,
+        to: speedUpTx.to,
+        value: speedUpTx.value,
+        data: speedUpTx.data,
+        gasLimit: speedUpTx.gasLimit,
+        gasPrice: speedUpTx.gasPrice || speedUpTx.maxFeePerGas,
+        nonce: tx.nonce,
+        timestamp: Date.now(),
+        status: 'pending',
+        networkId: (await provider.getNetwork()).chainId,
+        type: speedUpTx.type,
+        isSpeedUp: true,
+        originalTx: txHash
+      };
+
+      // 添加到待处理交易
+      this.pendingTransactions.set(txResponse.hash, {
+        ...txRecord,
+        txResponse
+      });
+
+      // 添加到历史记录
+      this.transactionHistory.unshift(txRecord);
+
+      // 更新原交易状态
+      if (this.pendingTransactions.has(txHash)) {
+        const originalTxData = this.pendingTransactions.get(txHash);
+        originalTxData.status = 'replaced';
+        originalTxData.replacedBy = txResponse.hash;
+        originalTxData.speedUp = true;
+        this.pendingTransactions.delete(txHash);
+
+        // 更新历史记录中的原交易
+        const historyIndex = this.transactionHistory.findIndex(t => t.hash === txHash);
+        if (historyIndex !== -1) {
+          this.transactionHistory[historyIndex] = {
+            ...this.transactionHistory[historyIndex],
+            status: 'replaced',
+            replacedBy: txResponse.hash,
+            speedUp: true
+          };
+        }
+
+        this.emit('transactionReplaced', {
+          original: txHash,
+          replacement: txResponse.hash,
+          type: 'speedup'
+        });
+      }
+
+      // 触发事件
+      this.emit('transactionSent', txRecord);
+      this.emit('transactionAdded', txRecord);
+
+      // 开始监控交易状态
+      this.monitorTransaction(txResponse.hash, provider);
+
+      return {
+        hash: txResponse.hash,
+        transaction: txRecord
+      };
+    } catch (error) {
+      this.emit('error', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 取消交易 - 使用相同的nonce发送一个0值交易到自己的地址
+   * @param {string} txHash - 要取消的交易哈希
+   * @param {Object} wallet - 钱包实例
+   * @param {Object} provider - Provider 实例
+   * @param {number} gasMultiplier - gas价格倍数（默认1.1倍）
+   * @returns {Promise<Object>} 新交易结果
+   */
+  async cancelTransaction(txHash, wallet, provider, gasMultiplier = 1.1) {
+    try {
+      // 获取原始交易
+      const pendingTx = this.pendingTransactions.get(txHash);
+      if (!pendingTx) {
+        // 尝试从历史记录中查找
+        const historyTx = this.transactionHistory.find(tx => tx.hash === txHash);
+        if (!historyTx || historyTx.status !== 'pending') {
+          throw new Error('未找到待处理交易或交易已确认');
+        }
+      }
+
+      // 获取原始交易详情
+      const tx = await provider.getTransaction(txHash);
+      if (!tx) {
+        throw new Error('无法获取交易详情');
+      }
+
+      // 检查交易是否已确认
+      if (tx.confirmations > 0) {
+        throw new Error('交易已确认，无法取消');
+      }
+
+      // 检查发送者是否匹配
+      if (tx.from.toLowerCase() !== wallet.address.toLowerCase()) {
+        throw new Error('只能取消自己发送的交易');
+      }
+
+      // 构建取消交易 - 发送0 ETH到自己的地址
+      const cancelTx = {
+        to: wallet.address, // 发送给自己
+        value: 0, // 0 ETH
+        data: '0x', // 无数据
+        nonce: tx.nonce, // 使用相同的nonce覆盖原交易
+      };
+
+      // 根据交易类型设置gas价格
+      if (tx.type === 2) { // EIP-1559
+        cancelTx.type = 2;
+        cancelTx.maxFeePerGas = tx.maxFeePerGas.mul(Math.floor(gasMultiplier * 100)).div(100);
+        cancelTx.maxPriorityFeePerGas = tx.maxPriorityFeePerGas.mul(Math.floor(gasMultiplier * 100)).div(100);
+      } else {
+        cancelTx.type = 0;
+        cancelTx.gasPrice = tx.gasPrice.mul(Math.floor(gasMultiplier * 100)).div(100);
+      }
+
+      // 设置较低的gasLimit，因为这是一个简单的交易
+      cancelTx.gasLimit = ethers.BigNumber.from('21000');
+
+      // 发送取消交易
+      const connectedWallet = wallet.connect(provider);
+      const txResponse = await connectedWallet.sendTransaction(cancelTx);
+
+      // 创建交易记录
+      const txRecord = {
+        hash: txResponse.hash,
+        from: wallet.address,
+        to: cancelTx.to,
+        value: cancelTx.value,
+        data: cancelTx.data,
+        gasLimit: cancelTx.gasLimit,
+        gasPrice: cancelTx.gasPrice || cancelTx.maxFeePerGas,
+        nonce: tx.nonce,
+        timestamp: Date.now(),
+        status: 'pending',
+        networkId: (await provider.getNetwork()).chainId,
+        type: cancelTx.type,
+        isCancel: true,
+        originalTx: txHash
+      };
+
+      // 添加到待处理交易
+      this.pendingTransactions.set(txResponse.hash, {
+        ...txRecord,
+        txResponse
+      });
+
+      // 添加到历史记录
+      this.transactionHistory.unshift(txRecord);
+
+      // 更新原交易状态
+      if (this.pendingTransactions.has(txHash)) {
+        const originalTxData = this.pendingTransactions.get(txHash);
+        originalTxData.status = 'replaced';
+        originalTxData.replacedBy = txResponse.hash;
+        originalTxData.cancelled = true;
+        this.pendingTransactions.delete(txHash);
+
+        // 更新历史记录中的原交易
+        const historyIndex = this.transactionHistory.findIndex(t => t.hash === txHash);
+        if (historyIndex !== -1) {
+          this.transactionHistory[historyIndex] = {
+            ...this.transactionHistory[historyIndex],
+            status: 'replaced',
+            replacedBy: txResponse.hash,
+            cancelled: true
+          };
+        }
+
+        this.emit('transactionReplaced', {
+          original: txHash,
+          replacement: txResponse.hash,
+          type: 'cancel'
+        });
+      }
+
+      // 触发事件
+      this.emit('transactionSent', txRecord);
+      this.emit('transactionAdded', txRecord);
+
+      // 开始监控交易状态
+      this.monitorTransaction(txResponse.hash, provider);
+
+      return {
+        hash: txResponse.hash,
+        transaction: txRecord
+      };
+    } catch (error) {
+      this.emit('error', error);
+      throw error;
+    }
+  }
 }
 
 // 创建单例实例

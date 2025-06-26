@@ -38,7 +38,7 @@ class ErrorBoundary extends React.Component {
             <div className="text-sm text-gray-600 mb-4">
               <p className="font-semibold">错误堆栈:</p>
               <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto max-h-40">
-                {this.state.errorInfo.componentStack}
+                {this.state.errorInfo && this.state.errorInfo.componentStack}
               </pre>
             </div>
             <button 

@@ -700,33 +700,67 @@ export const parseRevertReason = (errorData) => {
  * @returns {string} 格式化后的错误消息
  */
 export const formatTransactionError = (error) => {
-  // 常见错误代码和消息
-  const errorMessages = {
-    'insufficient funds': '余额不足以支付交易费用',
-    'gas required exceeds allowance': 'Gas不足',
-    'nonce too low': '交易已提交或已被替换',
-    'replacement fee too low': '替换交易的Gas价格太低',
-    'already known': '交易已在内存池中',
-    'transaction underpriced': '交易Gas价格太低',
-    'execution reverted': '交易执行被回滚'
-  };
+  // 尝试解析错误信息
+  let errorMessage = '交易失败';
   
-  // 尝试匹配常见错误消息
-  const errorMessage = error.message.toLowerCase();
-  for (const [key, value] of Object.entries(errorMessages)) {
-    if (errorMessage.includes(key)) {
-      return value;
+  try {
+    if (error.message) {
+      if (error.message.includes('insufficient funds')) {
+        return '余额不足以支付交易费用';
+      }
+      if (error.message.includes('nonce too low')) {
+        return '交易nonce值过低，请刷新页面重试';
+      }
+      if (error.message.includes('gas price too low')) {
+        return 'Gas价格过低，请提高Gas价格后重试';
+      }
+      if (error.message.includes('gas limit')) {
+        return 'Gas限制设置不正确';
+      }
+      if (error.message.includes('user rejected')) {
+        return '用户拒绝了交易';
+      }
+      
+      // 提取错误信息
+      errorMessage = error.message.split('(')[0].trim();
+      if (errorMessage.length > 100) {
+        errorMessage = errorMessage.substring(0, 100) + '...';
+      }
     }
+    
+    // 尝试解析revert原因
+    if (error.data) {
+      const revertReason = parseRevertReason(error.data);
+      if (revertReason) {
+        return `合约执行失败: ${revertReason}`;
+      }
+    }
+    
+    return errorMessage;
+  } catch (e) {
+    return '交易失败，请稍后重试';
+  }
+};
+
+/**
+ * 从助记词获取钱包并连接到Provider
+ * @param {string} mnemonic 助记词
+ * @param {string} path 派生路径
+ * @param {ethers.providers.Provider} provider 以太坊提供者
+ * @returns {ethers.Wallet} 已连接Provider的钱包实例
+ */
+export const getWalletWithProvider = (mnemonic, path, provider) => {
+  if (!mnemonic) {
+    throw new Error('需要助记词才能获取钱包');
   }
   
-  // 尝试解析revert原因
-  if (error.data) {
-    const reason = parseRevertReason(error.data);
-    if (reason) {
-      return `交易被回滚: ${reason}`;
-    }
+  if (!provider) {
+    throw new Error('需要Provider才能连接钱包');
   }
   
-  // 默认错误消息
-  return '交易失败，请稍后重试';
+  // 从助记词派生钱包
+  const wallet = createWalletFromMnemonic(mnemonic, path);
+  
+  // 连接到Provider
+  return wallet.connect(provider);
 }; 
