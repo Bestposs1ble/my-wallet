@@ -201,8 +201,8 @@ const TransactionDetailsModal = ({
           <div>
             <Text type="secondary">确认</Text>
             <div>
-              {transaction.confirmations ? (
-                <Text strong>{transaction.confirmations} 确认</Text>
+              {transaction.status === 'confirmed' ? (
+                <Text strong>已确认</Text>
               ) : (
                 <Text type="warning">等待确认...</Text>
               )}

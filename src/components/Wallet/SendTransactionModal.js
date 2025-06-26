@@ -375,6 +375,16 @@ const SendTransactionModal = ({
     setShowTokenList(false);
   };
 
+  // 计算总花费
+  let totalCost = '';
+  if (!selectedToken && amount && estimatedFee) {
+    const amt = parseFloat(amount);
+    const gas = parseFloat(estimatedFee);
+    if (!isNaN(amt) && !isNaN(gas)) {
+      totalCost = (amt + gas).toFixed(8);
+    }
+  }
+
   if (!visible) return null;
 
   return (
@@ -524,6 +534,13 @@ const SendTransactionModal = ({
                   <span>可用余额: {maxAvailable} {selectedToken ? selectedToken.symbol : 'ETH'}</span>
                   <span>≈ $0.00 USD</span>
                 </div>
+                {/* 新增：Gas费用和总花费提示 */}
+                {!selectedToken && amount && estimatedFee && (
+                  <div className="mt-2 text-xs text-blue-700">
+                    <div>预计Gas费用: <span className="font-mono">{estimatedFee} ETH</span></div>
+                    <div>总共将扣除: <span className="font-mono">{totalCost} ETH</span></div>
+                  </div>
+                )}
               </div>
               
               {/* Gas设置 */}
