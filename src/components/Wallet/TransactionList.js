@@ -11,7 +11,8 @@ import {
   ExclamationCircleOutlined,
   SearchOutlined,
   InfoCircleOutlined,
-  LoadingOutlined
+  LoadingOutlined,
+  UpOutlined
 } from '@ant-design/icons';
 import { Tooltip, Badge, Spin } from 'antd';
 
@@ -32,6 +33,9 @@ const TransactionList = ({
 }) => {
   const [filter, setFilter] = useState('all'); // all, sent, received, swap, pending, failed
   const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [pageSize, setPageSize] = useState(10); // 每页显示的交易数
+  const [currentPage, setCurrentPage] = useState(1); // 当前页码
+  const [loadingMore, setLoadingMore] = useState(false); // 加载更多状态
   
   // 交易类型图标映射
   const typeIcons = {
@@ -86,6 +90,22 @@ const TransactionList = ({
     if (filter === 'failed') return tx.status === 'failed';
     return tx.type === filter;
   });
+  
+  // 分页处理
+  const paginatedTransactions = filteredTransactions.slice(0, currentPage * pageSize);
+  const hasMoreTransactions = filteredTransactions.length > paginatedTransactions.length;
+  
+  // 加载更多交易
+  const loadMoreTransactions = () => {
+    if (hasMoreTransactions) {
+      setLoadingMore(true);
+      // 模拟异步加载
+      setTimeout(() => {
+        setCurrentPage(currentPage + 1);
+        setLoadingMore(false);
+      }, 500);
+    }
+  };
   
   // 格式化地址显示
   const formatAddress = (address) => {
@@ -144,6 +164,7 @@ const TransactionList = ({
                     onClick={() => {
                       setFilter(option.id);
                       setShowFilterMenu(false);
+                      setCurrentPage(1); // 重置到第一页
                     }}
                     className={`block w-full text-left px-4 py-2 text-sm ${filter === option.id ? 'bg-gray-100 text-primary-600' : 'text-gray-700 hover:bg-gray-50'}`}
                   >
@@ -157,150 +178,152 @@ const TransactionList = ({
       </div>
       
       {/* 交易列表 */}
-      {loading ? (
+      {loading && paginatedTransactions.length === 0 ? (
         <div className="flex justify-center items-center py-12">
           <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
         </div>
       ) : filteredTransactions.length > 0 ? (
-        <div className="space-y-2">
-          {filteredTransactions.map((tx) => (
-            <div 
-              key={tx.hash}
-              onClick={() => onViewDetails && onViewDetails(tx)}
-              className="group bg-white hover:bg-gray-50 rounded-xl border border-gray-200 p-3 cursor-pointer transition-colors"
-            >
-              <div className="flex items-start">
-                {/* 交易类型图标 */}
-                <div className="p-2 rounded-full bg-gray-100 mr-3">
-                  {typeIcons[tx.type] || typeIcons.send}
-                </div>
-                
-                {/* 交易内容 */}
-                <div className="flex-1">
-                  <div className="flex justify-between">
-                    <div className="flex items-center">
-                      <span className="font-medium">
-                        {tx.type === 'send' ? '发送' : 
-                         tx.type === 'receive' ? '接收' : 
-                         tx.type === 'swap' ? '兑换' : '合约交互'}
-                      </span>
-                      
-                      {/* 交易状态标签 */}
-                      <Tooltip title={tx.error || statusText[tx.status]}>
-                        <span className="ml-2">
-                          {tx.status === 'pending' ? (
-                            <Badge status="processing" text={<span className="text-xs text-yellow-500">处理中</span>} />
-                          ) : tx.status === 'confirmed' ? (
-                            <Badge status="success" text={<span className="text-xs text-green-500">已确认 
-                              {tx.confirmations > 1 ? ` (${tx.confirmations})` : ''}
-                            </span>} />
-                          ) : (
-                            <Badge status="error" text={<span className="text-xs text-red-500">失败</span>} />
-                          )}
-                        </span>
-                      </Tooltip>
-                    </div>
-                    <span className={`font-mono font-medium ${tx.type === 'send' ? 'text-orange-500' : 'text-green-500'}`}>
-                      {tx.type === 'send' ? '-' : '+'}{tx.amount} {tx.symbol || 'ETH'}
-                    </span>
+        <div>
+          <div className="space-y-2">
+            {paginatedTransactions.map((tx) => (
+              <div 
+                key={tx.hash}
+                onClick={() => onViewDetails && onViewDetails(tx)}
+                className="group bg-white hover:bg-gray-50 rounded-xl border border-gray-200 p-3 cursor-pointer transition-colors"
+              >
+                <div className="flex items-start">
+                  {/* 交易类型图标 */}
+                  <div className="p-2 rounded-full bg-gray-100 mr-3">
+                    {typeIcons[tx.type] || typeIcons.send}
                   </div>
                   
-                  {/* 交易详情 */}
-                  <div className="mt-1 flex justify-between text-xs text-gray-500">
-                    <div className="flex items-center space-x-1">
-                      <span>
-                        {tx.type === 'send' ? `发送至 ${formatAddress(tx.to)}` : 
-                         tx.type === 'receive' ? `从 ${formatAddress(tx.from)} 接收` : 
-                         tx.type === 'swap' ? `${formatAddress(tx.from)} → ${formatAddress(tx.to)}` : 
-                         `与合约 ${formatAddress(tx.to)} 交互`}
+                  {/* 交易内容 */}
+                  <div className="flex-1">
+                    <div className="flex justify-between">
+                      <div className="flex items-center">
+                        <span className="font-medium">
+                          {tx.type === 'send' ? '发送' : 
+                           tx.type === 'receive' ? '接收' : 
+                           tx.type === 'swap' ? '兑换' : '合约交互'}
+                        </span>
+                        
+                        {/* 交易状态标签 */}
+                        <Tooltip title={tx.error || statusText[tx.status]}>
+                          <span className="ml-2">
+                            {tx.status === 'pending' ? (
+                              <Badge status="processing" text={<span className="text-xs text-yellow-500">处理中</span>} />
+                            ) : tx.status === 'confirmed' ? (
+                              <Badge status="success" text={<span className="text-xs text-green-500">已确认 
+                                {tx.confirmations > 1 ? ` (${tx.confirmations})` : ''}
+                              </span>} />
+                            ) : (
+                              <Badge status="error" text={<span className="text-xs text-red-500">失败</span>} />
+                            )}
+                          </span>
+                        </Tooltip>
+                      </div>
+                      <span className={`font-mono font-medium ${tx.type === 'send' ? 'text-orange-500' : 'text-green-500'}`}>
+                        {tx.type === 'send' ? '-' : '+'}{tx.amount} {tx.symbol || 'ETH'}
                       </span>
                     </div>
-                    <Tooltip title={formatFullTime(tx.timestamp)}>
-                      <span>{formatTimestamp(tx.timestamp)}</span>
+                    
+                    {/* 交易详情 */}
+                    <div className="mt-1 flex justify-between text-xs text-gray-500">
+                      <div className="flex items-center space-x-1">
+                        <span>
+                          {tx.type === 'send' ? `发送至 ${formatAddress(tx.to)}` : 
+                           tx.type === 'receive' ? `从 ${formatAddress(tx.from)} 接收` : 
+                           tx.type === 'swap' ? `${formatAddress(tx.from)} → ${formatAddress(tx.to)}` : 
+                           `与合约 ${formatAddress(tx.to)} 交互`}
+                        </span>
+                      </div>
+                      <Tooltip title={formatFullTime(tx.timestamp)}>
+                        <span>{formatTimestamp(tx.timestamp)}</span>
+                      </Tooltip>
+                    </div>
+                  </div>
+                  
+                  {/* 查看详情按钮 */}
+                  <div className="ml-2 text-gray-400 group-hover:text-blue-500 transition-colors">
+                    <Tooltip title="查看详情">
+                      <InfoCircleOutlined />
                     </Tooltip>
                   </div>
                 </div>
                 
-                {/* 查看详情按钮 */}
-                <div className="ml-2 text-gray-400 group-hover:text-blue-500 transition-colors">
-                  <Tooltip title="查看详情">
-                    <InfoCircleOutlined />
-                  </Tooltip>
-                </div>
-              </div>
-              
-              {/* 交易信息 */}
-              <div className="mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500 grid grid-cols-2 gap-x-2 gap-y-1">
-                {/* Gas费用 */}
-                {(tx.gasPrice || tx.gasLimit) && (
-                  <>
-                    <span>Gas:</span>
-                    <span className="font-medium">{tx.gasPrice || '-'} Gwei</span>
-                  </>
-                )}
-                
-                {/* 区块号 */}
-                {tx.blockNumber && (
-                  <>
-                    <span>区块:</span>
-                    <span className="font-medium">#{tx.blockNumber}</span>
-                  </>
-                )}
-                
-                {/* 交易哈希 */}
-                <span>交易哈希:</span>
-                <div className="flex items-center">
-                  <span className="font-mono font-medium truncate">
-                    {tx.hash.substring(0, 10)}...
-                  </span>
+                {/* 交易信息 */}
+                <div className="mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500 grid grid-cols-2 gap-x-2 gap-y-1">
+                  {/* Gas费用 */}
+                  {(tx.gasPrice || tx.gasLimit) && (
+                    <>
+                      <span>Gas:</span>
+                      <span className="font-medium">{tx.gasPrice || '-'} Gwei</span>
+                    </>
+                  )}
+                  
+                  {/* 区块号 */}
+                  {tx.blockNumber && (
+                    <>
+                      <span>区块:</span>
+                      <span className="font-medium">#{tx.blockNumber}</span>
+                    </>
+                  )}
+                  
+                  {/* 交易哈希 */}
+                  <span>交易哈希:</span>
                   <a 
-                    href={`${networkExplorerUrl}${tx.hash}`}
-                    target="_blank"
+                    href={`${networkExplorerUrl}${tx.hash}`} 
+                    target="_blank" 
                     rel="noopener noreferrer"
+                    className="font-medium text-blue-500 hover:text-blue-700 truncate"
                     onClick={(e) => e.stopPropagation()}
-                    className="ml-1 text-blue-500 hover:text-blue-700"
                   >
-                    <SearchOutlined />
+                    {formatAddress(tx.hash)}
                   </a>
                 </div>
               </div>
+            ))}
+          </div>
+          
+          {/* 加载更多按钮 */}
+          {hasMoreTransactions && (
+            <div className="mt-4 flex justify-center">
+              <button
+                onClick={loadMoreTransactions}
+                disabled={loadingMore}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-700 flex items-center space-x-1 transition-colors"
+              >
+                {loadingMore ? (
+                  <>
+                    <LoadingOutlined className="mr-1" />
+                    <span>加载中...</span>
+                  </>
+                ) : (
+                  <>
+                    <DownOutlined className="mr-1" />
+                    <span>加载更多</span>
+                  </>
+                )}
+              </button>
             </div>
-          ))}
+          )}
+          
+          {/* 回到顶部按钮 - 当有多页数据时显示 */}
+          {currentPage > 1 && (
+            <div className="fixed bottom-6 right-6">
+              <button
+                onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                className="p-2 bg-white shadow-md rounded-full text-gray-600 hover:text-blue-600 transition-colors"
+                title="回到顶部"
+              >
+                <UpOutlined />
+              </button>
+            </div>
+          )}
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center py-12 px-4 border border-gray-200 rounded-xl bg-white">
-          <div className="bg-gray-100 p-3 rounded-full mb-4">
-            <SwapOutlined className="text-2xl text-gray-400" />
-          </div>
-          <h4 className="text-lg font-medium text-dark-800">暂无交易记录</h4>
-          <p className="text-gray-500 text-center mt-2">
-            {filter === 'all' 
-              ? '您的交易记录将显示在这里' 
-              : `没有找到${
-                  filter === 'send' ? '转出' : 
-                  filter === 'receive' ? '转入' : 
-                  filter === 'swap' ? '兑换' : 
-                  filter === 'pending' ? '待处理' :
-                  filter === 'failed' ? '失败' : ''
-                }的交易记录`}
-          </p>
-        </div>
-      )}
-      
-      {/* 查看更多按钮 */}
-      {filteredTransactions.length > 0 && filteredTransactions.length >= 5 && (
-        <div className="text-center">
-          <a 
-            href={`${networkExplorerUrl.replace('/tx/', '/address/')}${transactions[0]?.from || ''}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary-600 hover:text-primary-800 text-sm font-medium inline-flex items-center"
-          >
-            在区块浏览器中查看更多交易
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-            </svg>
-          </a>
+        <div className="py-8 text-center text-gray-500">
+          <p>暂无交易记录</p>
         </div>
       )}
     </div>
@@ -308,23 +331,7 @@ const TransactionList = ({
 };
 
 TransactionList.propTypes = {
-  transactions: PropTypes.arrayOf(
-    PropTypes.shape({
-      hash: PropTypes.string.isRequired,
-      from: PropTypes.string,
-      to: PropTypes.string,
-      amount: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
-      timestamp: PropTypes.number,
-      symbol: PropTypes.string,
-      type: PropTypes.oneOf(['send', 'receive', 'swap', 'contract']),
-      status: PropTypes.oneOf(['pending', 'confirmed', 'failed']),
-      confirmations: PropTypes.number,
-      blockNumber: PropTypes.number,
-      gasPrice: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
-      gasLimit: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
-      error: PropTypes.string
-    })
-  ),
+  transactions: PropTypes.array,
   loading: PropTypes.bool,
   onViewDetails: PropTypes.func,
   networkExplorerUrl: PropTypes.string

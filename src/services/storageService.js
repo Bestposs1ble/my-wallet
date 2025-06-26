@@ -10,15 +10,16 @@ const KEYS = {
   CURRENT_NETWORK: 'metamask-clone-current-network',
   SETTINGS: 'metamask-clone-settings',
   TOKENS: 'metamask-clone-tokens',
-  TX_HISTORY: 'metamask-clone-tx-history'
+  TX_HISTORY: 'metamask-clone-tx-history',
+  WALLET_DATA_PERSISTENCE: 'metamask-clone-data-persistence'
 };
 
 /**
- * 检查是否有存储的钱包
+ * 检查localStorage中是否有存储的钱包
  * @returns {boolean} 是否有存储的钱包
  */
 const hasWallets = () => {
-  return localStorage.getItem(KEYS.WALLETS) !== null;
+  return localStorage.getItem(KEYS.WALLETS) !== null || localStorage.getItem(KEYS.WALLET_DATA_PERSISTENCE) === 'true';
 };
 
 /**
@@ -64,6 +65,8 @@ const saveWalletsToDB = async (wallets, password) => {
   }
   const encryptedData = encryptData(wallets, password);
   await set(KEYS.WALLETS, encryptedData);
+  
+  localStorage.setItem(KEYS.WALLET_DATA_PERSISTENCE, 'true');
 };
 
 /**
@@ -321,25 +324,9 @@ const saveTransactionHistory = (transactions, address, networkId) => {
  * @returns {Array} 交易历史
  */
 const getTransactionHistory = (address, networkId) => {
-  if (!address) {
-    console.error('获取交易历史失败: 地址为空');
-    return [];
-  }
-  
-  // 确保地址转换为小写
-  const normalizedAddress = address.toLowerCase();
-  const key = `${KEYS.TX_HISTORY}-${normalizedAddress}-${networkId}`;
-  console.log(`获取交易历史, 键值: ${key}`);
-  
-  try {
-    const history = localStorage.getItem(key);
-    const parsedHistory = history ? JSON.parse(history) : [];
-    console.log(`获取到${parsedHistory.length}条交易记录`);
-    return parsedHistory;
-  } catch (error) {
-    console.error('解析交易历史记录失败:', error);
-    return [];
-  }
+  const key = `metamask-clone-tx-history-${address.toLowerCase()}-${networkId}`;
+  const data = localStorage.getItem(key);
+  return data ? JSON.parse(data) : [];
 };
 
 /**
@@ -349,48 +336,11 @@ const getTransactionHistory = (address, networkId) => {
  * @param {string} networkId 网络ID
  */
 const addTransactionToHistory = (transaction, address, networkId) => {
-  if (!address || !transaction) {
-    console.error('添加交易历史失败: 参数不完整', { address, networkId, transaction });
-    return [];
-  }
-  
-  // 确保地址转换为小写
-  const normalizedAddress = address.toLowerCase();
-  
-  // 确保交易from和to地址都是小写
-  if (transaction.from) {
-    transaction.from = transaction.from.toLowerCase();
-  }
-  if (transaction.to) {
-    transaction.to = transaction.to.toLowerCase();
-  }
-  
-  console.log(`添加交易到历史, 地址: ${normalizedAddress}, 网络: ${networkId}, 交易哈希: ${transaction.hash}`);
-  
-  try {
-    const history = getTransactionHistory(normalizedAddress, networkId);
-    
-    // 检查是否已存在相同交易哈希
-    const existingIndex = history.findIndex(tx => tx.hash === transaction.hash);
-    
-    let newHistory;
-    if (existingIndex >= 0) {
-      // 如果存在相同的交易哈希，更新该交易
-      console.log('更新已存在的交易记录');
-      newHistory = [...history];
-      newHistory[existingIndex] = { ...newHistory[existingIndex], ...transaction };
-    } else {
-      // 否则添加新交易到历史记录开头
-      console.log('添加新的交易记录');
-      newHistory = [transaction, ...history];
-    }
-    
-    saveTransactionHistory(newHistory, normalizedAddress, networkId);
-    return newHistory;
-  } catch (error) {
-    console.error('添加交易到历史记录失败:', error);
-    return [];
-  }
+  const key = `metamask-clone-tx-history-${address.toLowerCase()}-${networkId}`;
+  let history = getTransactionHistory(address, networkId);
+  history = Array.isArray(history) ? history : [];
+  history.unshift(transaction);
+  localStorage.setItem(key, JSON.stringify(history));
 };
 
 /**
@@ -556,7 +506,9 @@ const getDefaultSettings = () => {
 const clearAllData = async () => {
   // 清除localStorage中的数据
   Object.values(KEYS).forEach(key => {
-    localStorage.removeItem(key);
+    if (key !== KEYS.WALLET_DATA_PERSISTENCE) {
+      localStorage.removeItem(key);
+    }
   });
   
   // 清除所有带前缀的localStorage数据
@@ -575,6 +527,8 @@ const clearAllData = async () => {
   } catch (error) {
     console.error('清除IndexedDB数据失败:', error);
   }
+  
+  localStorage.removeItem(KEYS.WALLET_DATA_PERSISTENCE);
 };
 
 /**
@@ -590,6 +544,37 @@ const hasWalletsInDB = async () => {
     console.error('检查IndexedDB钱包数据失败:', error);
     return false;
   }
+};
+
+/**
+ * 从localStorage获取主助记词
+ * @param {string} password 解密密码
+ * @returns {string|null} 解密后的助记词
+ */
+const getMasterMnemonic = (password) => {
+  const encryptedData = localStorage.getItem(KEYS.MASTER_MNEMONIC);
+  if (!encryptedData) {
+    return null;
+  }
+  try {
+    return decryptData(encryptedData, password);
+  } catch (error) {
+    console.error('获取助记词失败:', error);
+    throw new Error('无法解密助记词');
+  }
+};
+
+/**
+ * 保存主助记词到localStorage
+ * @param {string} mnemonic 助记词
+ * @param {string} password 加密密码
+ */
+const saveMasterMnemonic = (mnemonic, password) => {
+  if (!mnemonic || !password) {
+    throw new Error('需要助记词和密码才能保存');
+  }
+  const encryptedData = encryptData(mnemonic, password);
+  localStorage.setItem(KEYS.MASTER_MNEMONIC, encryptedData);
 };
 
 export {
@@ -624,5 +609,7 @@ export {
   getDefaultNetworks,
   getDefaultSettings,
   clearAllData,
-  hasWalletsInDB
+  hasWalletsInDB,
+  saveMasterMnemonic,
+  getMasterMnemonic
 }; 

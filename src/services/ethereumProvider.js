@@ -231,7 +231,7 @@ class EthereumProvider extends EventEmitter {
     // 发送交易
     const result = await this._walletContext.sendTransaction(
       txParams.to,
-      ethers.utils.formatEther(txParams.value || '0x0'),
+      txParams.value ? ethers.utils.formatEther(ethers.BigNumber.from(txParams.value)) : '0',
       {
         gasPrice: txParams.gasPrice,
         gasLimit: txParams.gas,

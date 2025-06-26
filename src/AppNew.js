@@ -1,7 +1,12 @@
+/**
+ * 新架构的应用入口文件 - 展示如何使用重构后的架构
+ */
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { WalletProvider, useWallet } from './context/WalletContext';
-import ErrorBoundary from './components/ErrorBoundary';
+import { WalletProvider, useWallet } from './context/WalletProvider';
+import { useNetwork } from './hooks/useNetwork';
+
+// 导入页面组件（这些需要逐步迁移）
 import Home from './pages/Home';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -10,13 +15,15 @@ import ImportWallet from './pages/ImportWallet';
 import Settings from './pages/Settings';
 import Activity from './pages/Activity';
 import DappExample from './pages/DappExample';
-import ArchitectureTest from './pages/ArchitectureTest';
-import SimpleTest from './pages/SimpleTest';
+
+// 导入新的组件
 import DappRequestModal from './components/Wallet/DappRequestModal';
-import 'antd/dist/antd.css'; // 引入 Ant Design 样式
+
+// 样式
+import 'antd/dist/antd.css';
 import './App.css';
 
-// 渲染DappRequestModal组件包装器
+// DApp 请求处理组件
 function DappHandler() {
   const { 
     dappRequest, 
@@ -25,14 +32,12 @@ function DappHandler() {
     rejectDappRequest 
   } = useWallet();
 
-  // 处理批准请求
   const handleApprove = () => {
     if (dappRequest) {
       approveDappRequest(dappRequest.id);
     }
   };
 
-  // 处理拒绝请求
   const handleReject = () => {
     if (dappRequest) {
       rejectDappRequest(dappRequest.id);
@@ -53,28 +58,28 @@ function DappHandler() {
   );
 }
 
+// 加载状态组件
+const LoadingScreen = ({ message = '正在加载...' }) => (
+  <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="text-center">
+      <div className="spinner-border text-primary mb-4" />
+      <p className="text-gray-600">{message}</p>
+    </div>
+  </div>
+);
+
 // 路由保护组件 - 需要已解锁的钱包
 const PrivateRoute = ({ children }) => {
   const { hasWallets, isLocked, isInitialized } = useWallet();
   
-  // 如果还在初始化，显示加载中
   if (!isInitialized) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="spinner-border text-primary mb-4" />
-          <p className="text-gray-600">正在加载钱包信息...</p>
-        </div>
-      </div>
-    );
+    return <LoadingScreen message="正在初始化钱包..." />;
   }
   
-  // 如果没有钱包，重定向到首页
   if (!hasWallets) {
     return <Navigate to="/" replace />;
   }
   
-  // 如果钱包已锁定，重定向到登录页
   if (isLocked) {
     return <Navigate to="/login" replace />;
   }
@@ -82,28 +87,18 @@ const PrivateRoute = ({ children }) => {
   return children;
 };
 
-// 仅在没有钱包时可访问的路由 (创建/导入钱包流程)
+// 仅在没有钱包时可访问的路由
 const OnboardingRoute = ({ children }) => {
   const { hasWallets, isLocked, isInitialized } = useWallet();
   
-  // 如果还在初始化，显示加载中
   if (!isInitialized) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="spinner-border text-primary mb-4" />
-          <p className="text-gray-600">正在加载钱包信息...</p>
-        </div>
-      </div>
-    );
+    return <LoadingScreen message="正在检查钱包状态..." />;
   }
   
-  // 如果有钱包且已解锁，重定向到仪表盘
   if (hasWallets && !isLocked) {
     return <Navigate to="/dashboard" replace />;
   }
   
-  // 如果有钱包但未解锁，重定向到登录页面
   if (hasWallets && isLocked) {
     return <Navigate to="/login" replace />;
   }
@@ -111,23 +106,14 @@ const OnboardingRoute = ({ children }) => {
   return children;
 };
 
-// 创建钱包流程的路由 - 允许在创建过程中访问，即使钱包已创建
+// 创建钱包流程的路由
 const CreateWalletRoute = ({ children }) => {
   const { isInitialized } = useWallet();
   
-  // 如果还在初始化，显示加载中
   if (!isInitialized) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="spinner-border text-primary mb-4" />
-          <p className="text-gray-600">正在加载钱包信息...</p>
-        </div>
-      </div>
-    );
+    return <LoadingScreen message="正在准备创建钱包..." />;
   }
   
-  // 不检查钱包状态，允许访问创建钱包的所有步骤
   return children;
 };
 
@@ -135,29 +121,18 @@ const CreateWalletRoute = ({ children }) => {
 const HomeRoute = ({ children }) => {
   const { hasWallets, isLocked, isInitialized } = useWallet();
   
-  // 如果还在初始化，显示加载中
   if (!isInitialized) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="spinner-border text-primary mb-4" />
-          <p className="text-gray-600">正在加载钱包信息...</p>
-        </div>
-      </div>
-    );
+    return <LoadingScreen message="正在检查钱包..." />;
   }
   
-  // 如果有钱包但已锁定，重定向到登录页
   if (hasWallets && isLocked) {
     return <Navigate to="/login" replace />;
   }
   
-  // 如果有钱包且已解锁，重定向到仪表盘
   if (hasWallets && !isLocked) {
     return <Navigate to="/dashboard" replace />;
   }
   
-  // 否则（没有钱包），显示首页
   return children;
 };
 
@@ -165,24 +140,14 @@ const HomeRoute = ({ children }) => {
 const LoginRoute = ({ children }) => {
   const { hasWallets, isLocked, isInitialized } = useWallet();
   
-  // 如果还在初始化，显示加载中
   if (!isInitialized) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="spinner-border text-primary mb-4" />
-          <p className="text-gray-600">正在加载钱包信息...</p>
-        </div>
-      </div>
-    );
+    return <LoadingScreen message="正在验证钱包..." />;
   }
   
-  // 如果没有钱包，重定向到首页
   if (!hasWallets) {
     return <Navigate to="/" replace />;
   }
   
-  // 如果钱包已解锁，重定向到仪表盘
   if (!isLocked) {
     return <Navigate to="/dashboard" replace />;
   }
@@ -190,11 +155,88 @@ const LoginRoute = ({ children }) => {
   return children;
 };
 
+// 网络状态监控组件
+const NetworkMonitor = () => {
+  const { connectionStatus, currentNetwork, getCurrentNetworkConfig } = useNetwork();
+  
+  // 只在开发环境显示
+  if (process.env.NODE_ENV !== 'development') {
+    return null;
+  }
+  
+  const networkConfig = getCurrentNetworkConfig();
+  
+  return (
+    <div className="fixed bottom-4 right-4 bg-white shadow-lg rounded-lg p-3 text-xs border z-50">
+      <div className="font-semibold mb-1">网络状态</div>
+      <div className="space-y-1">
+        <div>网络: {networkConfig?.name || currentNetwork}</div>
+        <div className={`status-${connectionStatus}`}>
+          状态: {connectionStatus === 'connected' ? '✅ 已连接' : 
+                connectionStatus === 'connecting' ? '🔄 连接中' : 
+                connectionStatus === 'error' ? '❌ 错误' : '⚪ 未连接'}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// 错误边界组件
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('应用错误:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+          <div className="text-center max-w-md mx-auto p-6">
+            <div className="text-red-500 text-6xl mb-4">⚠️</div>
+            <h1 className="text-2xl font-bold text-gray-800 mb-2">应用出现错误</h1>
+            <p className="text-gray-600 mb-4">
+              抱歉，应用遇到了一个意外错误。请刷新页面重试。
+            </p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+            >
+              刷新页面
+            </button>
+            {process.env.NODE_ENV === 'development' && (
+              <details className="mt-4 text-left">
+                <summary className="cursor-pointer text-sm text-gray-500">
+                  错误详情 (开发模式)
+                </summary>
+                <pre className="mt-2 text-xs bg-gray-100 p-2 rounded overflow-auto">
+                  {this.state.error?.toString()}
+                </pre>
+              </details>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+// 主路由组件
 function AppRoutes() {
   return (
     <Router>
       <Routes>
-        {/* 首页路由 - 根据钱包状态决定重定向 */}
+        {/* 首页路由 */}
         <Route 
           path="/" 
           element={
@@ -204,7 +246,7 @@ function AppRoutes() {
           } 
         />
         
-        {/* 创建钱包路由 - 允许在创建过程中访问，即使钱包已创建 */}
+        {/* 创建钱包路由 */}
         <Route 
           path="/create" 
           element={
@@ -246,7 +288,7 @@ function AppRoutes() {
           } 
         />
         
-        {/* 登录路由 - 仅在有钱包且锁定时可访问 */}
+        {/* 登录路由 */}
         <Route 
           path="/login" 
           element={
@@ -256,7 +298,7 @@ function AppRoutes() {
           } 
         />
         
-        {/* 受保护路由 - 需要已解锁的钱包 */}
+        {/* 受保护路由 */}
         <Route 
           path="/dashboard" 
           element={
@@ -290,31 +332,19 @@ function AppRoutes() {
           } 
         />
         
-        {/* 架构测试页面 - 仅开发环境 */}
-        {process.env.NODE_ENV === 'development' && (
-          <Route 
-            path="/test" 
-            element={<ArchitectureTest />} 
-          />
-        )}
-        
-        {/* 简单架构测试页面 */}
-        {process.env.NODE_ENV === 'development' && (
-          <Route 
-            path="/simple-test" 
-            element={<SimpleTest />} 
-          />
-        )}
-        
-        {/* 默认重定向到首页 */}
+        {/* 默认重定向 */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      
+      {/* 全局组件 */}
       <DappHandler />
+      <NetworkMonitor />
     </Router>
   );
 }
 
-function App() {
+// 主应用组件
+function AppNew() {
   return (
     <ErrorBoundary>
       <WalletProvider>
@@ -324,4 +354,4 @@ function App() {
   );
 }
 
-export default App; 
+export default AppNew;

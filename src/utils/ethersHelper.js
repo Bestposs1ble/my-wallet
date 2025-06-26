@@ -12,6 +12,13 @@ export const createMnemonic = (strength = 128) => {
 };
 
 /**
+ * 生成随机助记词 (createMnemonic 的别名)
+ * @param {number} strength 熵的位数
+ * @returns {string} 生成的助记词
+ */
+export const generateMnemonic = createMnemonic;
+
+/**
  * 验证助记词是否有效
  * @param {string} mnemonic 助记词
  * @returns {boolean} 是否有效
@@ -180,32 +187,57 @@ export const estimateGasPrice = async (provider) => {
  */
 export const createTransaction = async (to, value, provider, options = {}) => {
   try {
-    // 转换为wei
-    const valueInWei = ethers.utils.parseEther(value.toString());
+    // 创建交易对象
+    const tx = {
+      to,
+      value: ethers.utils.parseEther(value.toString())
+    };
     
-    // 获取gasPrice
-    const gasPrice = options.gasPrice || await provider.getGasPrice();
-    
-    // 估算gasLimit (如果没有提供)
-    let gasLimit = options.gasLimit;
-    if (!gasLimit) {
-      const estimateGas = await provider.estimateGas({
-        to,
-        value: valueInWei
-      });
-      // 添加一点缓冲空间
-      gasLimit = estimateGas.mul(12).div(10); // 120% of estimated gas
+    // 处理gasPrice
+    if (options.gasPrice) {
+      // 如果传入的是字符串，将其解析为gwei单位的BigNumber
+      tx.gasPrice = typeof options.gasPrice === 'string' 
+        ? ethers.utils.parseUnits(options.gasPrice, 'gwei')
+        : options.gasPrice;
+    } else {
+      // 否则获取网络当前gasPrice
+      tx.gasPrice = await provider.getGasPrice();
     }
     
-    return {
-      to,
-      value: valueInWei,
-      gasLimit,
-      gasPrice,
-      nonce: options.nonce,
-      chainId: options.chainId || (await provider.getNetwork()).chainId,
-    };
+    // 处理gasLimit
+    if (options.gasLimit) {
+      // 如果传入的是字符串，将其解析为BigNumber
+      tx.gasLimit = typeof options.gasLimit === 'string' 
+        ? ethers.BigNumber.from(options.gasLimit)
+        : options.gasLimit;
+    } else {
+      // 否则估算gasLimit
+      const from = options.from || null;
+      const estimatedGas = await provider.estimateGas({
+        to: tx.to,
+        value: tx.value,
+        from
+      });
+      // 增加20%的安全系数
+      tx.gasLimit = estimatedGas.mul(120).div(100);
+    }
+    
+    // 添加nonce（如果提供）
+    if (options.nonce !== undefined) {
+      tx.nonce = options.nonce;
+    }
+    
+    // 添加chainId（如果提供）
+    if (options.chainId) {
+      tx.chainId = options.chainId;
+    } else {
+      const network = await provider.getNetwork();
+      tx.chainId = network.chainId;
+    }
+    
+    return tx;
   } catch (error) {
+    console.error('创建交易失败:', error);
     throw new Error(`创建交易失败: ${error.message}`);
   }
 };
@@ -224,16 +256,141 @@ export const sendTransaction = async (wallet, toAddress, amount, options = {}) =
   }
   
   try {
-    const tx = await createTransaction(
-      toAddress,
-      amount,
-      wallet.provider,
-      options
-    );
+    console.log('======= 交易准备 =======');
+    console.log('发送方地址:', wallet.address);
+    console.log('接收方地址:', toAddress);
+    console.log('发送金额:', amount, 'ETH');
+    console.log('交易选项:', options);
     
-    return await wallet.sendTransaction(tx);
+    // 创建交易对象
+    const tx = {
+      to: toAddress,
+      value: ethers.utils.parseEther(amount.toString())
+    };
+    
+    console.log('解析后的金额(wei):', tx.value.toString());
+    
+    // 获取网络信息
+    const network = await wallet.provider.getNetwork();
+    console.log('当前网络:', network);
+    
+    // 处理gasPrice
+    if (options.gasPrice) {
+      // 如果传入的是字符串，将其解析为gwei单位的BigNumber
+      tx.gasPrice = ethers.utils.parseUnits(options.gasPrice, 'gwei');
+      console.log('使用自定义gasPrice:', options.gasPrice, 'Gwei =', tx.gasPrice.toString(), 'wei');
+    } else {
+      // 否则获取网络当前gasPrice
+      tx.gasPrice = await wallet.provider.getGasPrice();
+      console.log('使用网络gasPrice:', ethers.utils.formatUnits(tx.gasPrice, 'gwei'), 'Gwei =', tx.gasPrice.toString(), 'wei');
+      
+      // 如果是本地网络(Ganache)，确保gasPrice不会太高
+      if (network.chainId === 1337) {
+        const suggestedGasPrice = ethers.utils.parseUnits('20', 'gwei'); // 20 Gwei应该足够了
+        if (tx.gasPrice.gt(suggestedGasPrice)) {
+          console.log('本地网络检测到高gasPrice，调整为更合理的值');
+          tx.gasPrice = suggestedGasPrice;
+          console.log('调整后的gasPrice:', ethers.utils.formatUnits(tx.gasPrice, 'gwei'), 'Gwei');
+        }
+      }
+    }
+    
+    // 处理gasLimit
+    if (options.gasLimit) {
+      // 如果传入的是字符串，将其解析为BigNumber
+      tx.gasLimit = ethers.BigNumber.from(options.gasLimit);
+      console.log('使用自定义gasLimit:', tx.gasLimit.toString());
+    } else {
+      // 否则估算gasLimit
+      try {
+        const estimateOptions = {
+          to: tx.to,
+          value: tx.value,
+          from: wallet.address
+        };
+        console.log('估算gasLimit的参数:', estimateOptions);
+        
+        const estimatedGas = await wallet.provider.estimateGas(estimateOptions);
+        console.log('估算的原始gasLimit:', estimatedGas.toString());
+        
+        // 增加20%的安全系数
+        tx.gasLimit = estimatedGas.mul(120).div(100);
+        console.log('增加安全系数后的gasLimit:', tx.gasLimit.toString());
+      } catch (estimateError) {
+        console.error('估算gasLimit失败:', estimateError);
+        // 使用默认值
+        tx.gasLimit = ethers.BigNumber.from('21000');
+        console.log('使用默认gasLimit:', tx.gasLimit.toString());
+      }
+    }
+    
+    // 添加nonce和chainId（如果提供）
+    if (options.nonce !== undefined) {
+      tx.nonce = options.nonce;
+      console.log('使用自定义nonce:', tx.nonce);
+    } else {
+      // 获取当前nonce
+      tx.nonce = await wallet.provider.getTransactionCount(wallet.address);
+      console.log('使用当前nonce:', tx.nonce);
+    }
+    
+    // 获取chainId
+    if (options.chainId) {
+      tx.chainId = options.chainId;
+      console.log('使用自定义chainId:', tx.chainId);
+    } else {
+      tx.chainId = network.chainId;
+      console.log('使用网络chainId:', tx.chainId);
+    }
+    
+    // 检查余额是否足够
+    const balance = await wallet.provider.getBalance(wallet.address);
+    const totalCost = tx.value.add(tx.gasLimit.mul(tx.gasPrice));
+    
+    console.log('======= 余额检查 =======');
+    console.log('当前余额:', ethers.utils.formatEther(balance), 'ETH =', balance.toString(), 'wei');
+    console.log('交易金额:', ethers.utils.formatEther(tx.value), 'ETH =', tx.value.toString(), 'wei');
+    console.log('Gas成本:', ethers.utils.formatEther(tx.gasLimit.mul(tx.gasPrice)), 'ETH =', tx.gasLimit.mul(tx.gasPrice).toString(), 'wei');
+    console.log('总成本:', ethers.utils.formatEther(totalCost), 'ETH =', totalCost.toString(), 'wei');
+    console.log('余额是否足够:', balance.gte(totalCost) ? '是' : '否');
+    
+    if (balance.lt(totalCost)) {
+      const errorMsg = `余额不足以支付交易费用。需要: ${ethers.utils.formatEther(totalCost)} ETH, 可用: ${ethers.utils.formatEther(balance)} ETH`;
+      console.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+    
+    console.log('======= 发送交易 =======');
+    console.log('最终交易对象:', {
+      to: tx.to,
+      value: tx.value.toString(),
+      gasPrice: tx.gasPrice.toString(),
+      gasLimit: tx.gasLimit.toString(),
+      nonce: tx.nonce,
+      chainId: tx.chainId
+    });
+    
+    // 发送交易
+    const response = await wallet.sendTransaction(tx);
+    console.log('交易已发送:', response.hash);
+    return response;
   } catch (error) {
-    throw new Error(`发送交易失败: ${error.message}`);
+    console.error('发送交易详细错误:', error);
+    
+    // 尝试解析错误
+    if (error.error && error.error.body) {
+      try {
+        const errorBody = JSON.parse(error.error.body);
+        console.error('RPC错误详情:', errorBody);
+        if (errorBody.error && errorBody.error.message) {
+          console.error('RPC错误消息:', errorBody.error.message);
+        }
+      } catch (parseError) {
+        console.error('无法解析错误体:', error.error.body);
+      }
+    }
+    
+    throw error;
   }
 };
 
@@ -474,4 +631,102 @@ export const getMultipleTokenBalances = async (tokens, walletAddress, provider) 
   }));
   
   return balances;
+};
+
+/**
+ * 解析交易失败的原因
+ * @param {string} errorData 错误数据
+ * @returns {string|null} 解析后的错误原因
+ */
+export const parseRevertReason = (errorData) => {
+  try {
+    // 检查是否是标准的revert reason格式
+    if (errorData && errorData.startsWith('0x08c379a0')) {
+      // 解析Error(string)的ABI编码
+      const abiCoder = new ethers.utils.AbiCoder();
+      const reason = abiCoder.decode(['string'], '0x' + errorData.slice(10));
+      return reason[0];
+    }
+    
+    // 检查是否是Panic错误
+    if (errorData && errorData.startsWith('0x4e487b71')) {
+      // 解析Panic(uint256)的ABI编码
+      const abiCoder = new ethers.utils.AbiCoder();
+      const code = abiCoder.decode(['uint256'], '0x' + errorData.slice(10));
+      const panicCodes = {
+        0x01: '断言失败',
+        0x11: '算术运算中的上溢或下溢',
+        0x12: '除以零',
+        0x21: '转换为枚举类型时值越界',
+        0x22: '访问存储字节数组时索引不正确',
+        0x31: '弹出空数组',
+        0x32: '数组访问越界',
+        0x41: '内存分配溢出',
+        0x51: '调用不存在的内部函数'
+      };
+      
+      const errorCode = '0x' + code[0].toHexString().slice(2).padStart(2, '0');
+      return panicCodes[errorCode] || `未知Panic错误(${errorCode})`;
+    }
+    
+    // 检查是否是自定义错误
+    if (errorData && errorData.length >= 10) {
+      // 尝试解析自定义错误的签名
+      const errorSignature = errorData.slice(0, 10);
+      const knownErrors = {
+        '0x08c379a0': 'Error(string)',
+        '0x4e487b71': 'Panic(uint256)',
+        '0x01e0c128': 'TransferFailed()',
+        '0x7939f424': 'InsufficientBalance()',
+        '0x0a14c4b5': 'InvalidAddress()',
+        '0x19169f20': 'NotOwner()',
+        '0x82b42900': 'Paused()',
+        '0xa9802a8c': 'NotAuthorized()'
+      };
+      
+      return knownErrors[errorSignature] || '未知的自定义错误';
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('解析revert原因失败:', error);
+    return null;
+  }
+};
+
+/**
+ * 格式化交易错误消息
+ * @param {Error} error 交易错误对象
+ * @returns {string} 格式化后的错误消息
+ */
+export const formatTransactionError = (error) => {
+  // 常见错误代码和消息
+  const errorMessages = {
+    'insufficient funds': '余额不足以支付交易费用',
+    'gas required exceeds allowance': 'Gas不足',
+    'nonce too low': '交易已提交或已被替换',
+    'replacement fee too low': '替换交易的Gas价格太低',
+    'already known': '交易已在内存池中',
+    'transaction underpriced': '交易Gas价格太低',
+    'execution reverted': '交易执行被回滚'
+  };
+  
+  // 尝试匹配常见错误消息
+  const errorMessage = error.message.toLowerCase();
+  for (const [key, value] of Object.entries(errorMessages)) {
+    if (errorMessage.includes(key)) {
+      return value;
+    }
+  }
+  
+  // 尝试解析revert原因
+  if (error.data) {
+    const reason = parseRevertReason(error.data);
+    if (reason) {
+      return `交易被回滚: ${reason}`;
+    }
+  }
+  
+  // 默认错误消息
+  return '交易失败，请稍后重试';
 }; 

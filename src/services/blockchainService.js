@@ -221,15 +221,76 @@ const isValidAddress = (address) => {
  */
 const estimateTransactionGas = async (txObject) => {
   try {
+    console.log('======= 估算交易Gas =======');
+    console.log('交易对象:', txObject);
+    
     const currentProvider = getProvider();
-    const gasPrice = await currentProvider.getGasPrice();
-    const gasLimit = await currentProvider.estimateGas(txObject);
+    console.log('使用Provider:', currentProvider.connection?.url);
+    
+    // 获取当前网络
+    let network;
+    try {
+      network = await currentProvider.getNetwork();
+      console.log('当前网络:', network);
+    } catch (networkError) {
+      console.error('获取网络信息失败:', networkError);
+    }
+    
+    // 获取gasPrice
+    let gasPrice = await currentProvider.getGasPrice();
+    console.log('当前gasPrice:', ethers.utils.formatUnits(gasPrice, 'gwei'), 'Gwei =', gasPrice.toString(), 'wei');
+    
+    // 如果是本地网络(Ganache)，使用更合理的gasPrice
+    if (network && network.chainId === 1337) {
+      const suggestedGasPrice = ethers.utils.parseUnits('20', 'gwei'); // 20 Gwei
+      if (gasPrice.gt(suggestedGasPrice)) {
+        console.log('本地网络检测到高gasPrice，调整为更合理的值');
+        gasPrice = suggestedGasPrice;
+        console.log('调整后的gasPrice:', ethers.utils.formatUnits(gasPrice, 'gwei'), 'Gwei');
+      }
+    }
+    
+    // 估算基本的gasLimit
+    console.log('估算gasLimit...');
+    let baseGasLimit;
+    try {
+      baseGasLimit = await currentProvider.estimateGas(txObject);
+      console.log('估算的原始gasLimit:', baseGasLimit.toString());
+    } catch (estimateError) {
+      console.error('估算gasLimit失败:', estimateError);
+      // 使用默认值
+      baseGasLimit = ethers.BigNumber.from('21000');
+      console.log('使用默认gasLimit:', baseGasLimit.toString());
+    }
+    
+    // 增加20%的安全系数，以防止gas不足
+    const safetyFactor = 1.2;
+    const gasLimit = baseGasLimit.mul(Math.floor(safetyFactor * 100)).div(100);
+    console.log('增加安全系数后的gasLimit:', gasLimit.toString());
     
     // 计算总gas费用 (wei)
     const gasFeeWei = gasPrice.mul(gasLimit);
     // 转换为ETH
     const gasFee = ethers.utils.formatEther(gasFeeWei);
+    console.log('估算的gas费用:', gasFee, 'ETH =', gasFeeWei.toString(), 'wei');
     
+    // 检查交易总成本
+    if (txObject.value) {
+      const totalCost = ethers.BigNumber.from(txObject.value).add(gasFeeWei);
+      console.log('交易总成本:', ethers.utils.formatEther(totalCost), 'ETH =', totalCost.toString(), 'wei');
+      
+      if (txObject.from) {
+        try {
+          const balance = await currentProvider.getBalance(txObject.from);
+          console.log('发送方余额:', ethers.utils.formatEther(balance), 'ETH =', balance.toString(), 'wei');
+          console.log('余额是否足够:', balance.gte(totalCost) ? '是' : '否');
+        } catch (balanceError) {
+          console.error('获取余额失败:', balanceError);
+        }
+      }
+    }
+    
+    console.log('======= 估算完成 =======');
     return {
       gasFee,
       gasLimit,
@@ -332,7 +393,11 @@ const estimateTokenTransactionGas = async (tokenAddress, fromAddress, toAddress,
     
     // 估算Gas
     const gasPrice = await currentProvider.getGasPrice();
-    const gasLimit = await contract.estimateGas.transfer(toAddress, amountInSmallestUnit, { from: fromAddress });
+    const baseGasLimit = await contract.estimateGas.transfer(toAddress, amountInSmallestUnit, { from: fromAddress });
+    
+    // 增加30%的安全系数，因为代币交易更复杂
+    const safetyFactor = 1.3;
+    const gasLimit = baseGasLimit.mul(Math.floor(safetyFactor * 100)).div(100);
     
     // 计算总Gas费用(wei)
     const gasFeeWei = gasPrice.mul(gasLimit);
@@ -350,10 +415,21 @@ const estimateTokenTransactionGas = async (tokenAddress, fromAddress, toAddress,
   }
 };
 
+/**
+ * 创建新的 Provider 实例
+ * @param {string} url RPC URL
+ * @param {number} chainId 链ID
+ * @returns {ethers.providers.Provider} Provider 实例
+ */
+const createProvider = (url, chainId) => {
+  return ethersHelper.createProvider(url, chainId);
+};
+
 export {
   initBlockchainService,
   getProvider,
   updateProvider,
+  createProvider,
   getEthBalance,
   getCurrentBlockNumber,
   getGasPrice,

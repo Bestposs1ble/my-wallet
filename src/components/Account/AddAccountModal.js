@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Modal, Form, Input, Button, Radio, Alert, Tooltip } from 'antd';
 import PropTypes from 'prop-types';
 import { KeyOutlined, EyeOutlined, EyeInvisibleOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
@@ -34,12 +34,11 @@ const AddAccountModal = ({
   };
 
   // 校验私钥有效性
-  useEffect(() => {
-    const privateKey = form.getFieldValue('privateKey');
+  const validatePrivateKey = (privateKey) => {
     if (!privateKey) {
       setPrivateKeyValid(null);
       setPrivateKeyAddress('');
-      return;
+      return false;
     }
 
     try {
@@ -62,11 +61,19 @@ const AddAccountModal = ({
       
       setPrivateKeyValid(true);
       setPrivateKeyAddress(wallet.address);
+      return true;
     } catch (error) {
       setPrivateKeyValid(false);
       setPrivateKeyAddress('');
+      return false;
     }
-  }, [form.getFieldValue('privateKey')]);
+  };
+  
+  // 私钥输入框值变化处理
+  const handlePrivateKeyChange = (e) => {
+    const value = e.target.value;
+    validatePrivateKey(value);
+  };
   
   // 重置表单
   const resetFormFields = () => {
@@ -86,6 +93,18 @@ const AddAccountModal = ({
   // 账户类型变更处理
   const handleAccountTypeChange = (e) => {
     setAccountType(e.target.value);
+  };
+  
+  // 切换显示/隐藏私钥
+  const togglePrivateKeyVisibility = () => {
+    const newVisibility = !showPrivateKey;
+    setShowPrivateKey(newVisibility);
+    
+    // 当显示明文私钥时，重新验证一次
+    if (newVisibility) {
+      const privateKey = form.getFieldValue('privateKey');
+      validatePrivateKey(privateKey);
+    }
   };
   
   return (
@@ -151,14 +170,16 @@ const AddAccountModal = ({
             }
             rules={[
               { required: true, message: '请输入私钥' },
-              () => ({
-                validator(_, value) {
-                  if (!value || privateKeyValid === true) {
+              {
+                validator: (_, value) => {
+                  // 直接在此处验证私钥有效性
+                  const isValid = validatePrivateKey(value);
+                  if (!value || isValid) {
                     return Promise.resolve();
                   }
                   return Promise.reject(new Error('无效的私钥格式'));
                 }
-              })
+              }
             ]}
           >
             <Input 
@@ -166,11 +187,12 @@ const AddAccountModal = ({
               type={showPrivateKey ? "text" : "password"}
               placeholder="输入以太坊私钥(带或不带0x前缀)"
               className="font-mono"
+              onChange={handlePrivateKeyChange}
               suffix={
                 <Button 
                   type="text" 
                   icon={showPrivateKey ? <EyeInvisibleOutlined /> : <EyeOutlined />} 
-                  onClick={() => setShowPrivateKey(!showPrivateKey)}
+                  onClick={togglePrivateKeyVisibility}
                   style={{ marginRight: -12 }}
                 />
               }

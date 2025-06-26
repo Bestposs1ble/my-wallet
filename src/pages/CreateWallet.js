@@ -157,8 +157,6 @@ const CreateWallet = ({ step: routeStep }) => {
   // 表单变更处理
   const handleInputChange = (e) => {
     const { name, value, checked, type } = e.target;
-    console.log('input change:', name, value, checked, type);
-    
     // 修复复选框状态更新逻辑
     if (type === 'checkbox') {
       setWalletData(prev => ({
@@ -171,7 +169,6 @@ const CreateWallet = ({ step: routeStep }) => {
         [name]: value
       }));
     }
-    
     setFormError('');
   };
 
@@ -220,14 +217,12 @@ const CreateWallet = ({ step: routeStep }) => {
     }
     
     setIsCreating(true);
-    console.log('开始创建钱包...');
     
     try {
       // 创建HD钱包
       const result = await createHDWallet(walletData.name, walletData.password);
       
       if (result && result.mnemonic) {
-        console.log('钱包创建成功，准备导航到备份页面');
         // 成功创建，保存助记词，进入下一步
         setWalletData(prev => ({...prev, mnemonic: result.mnemonic}));
         
@@ -241,7 +236,6 @@ const CreateWallet = ({ step: routeStep }) => {
         // 设置定时器，确保在页面跳转后清除敏感数据
         const redirectTimer = setTimeout(() => {
           // 直接使用window.location.href进行页面跳转
-          console.log('直接使用window.location.href导航到备份助记词页面');
           window.location.href = '/create/backup';
           
           // 设置另一个定时器，在页面跳转后清除sessionStorage中的敏感数据
@@ -280,7 +274,6 @@ const CreateWallet = ({ step: routeStep }) => {
   const handleVerifyMnemonic = async (selectedWords) => {
     const mnemonicWords = walletData.mnemonic.split(' ');
     let allCorrect = true;
-    
     for (let i = 0; i < verificationWords.length; i++) {
       const wordObj = verificationWords[i];
       if (selectedWords[i] !== mnemonicWords[wordObj.index]) {
@@ -288,36 +281,26 @@ const CreateWallet = ({ step: routeStep }) => {
         break;
       }
     }
-    
     if (allCorrect) {
       setVerificationComplete(true);
       message.success('助记词验证成功！');
       try {
         if (walletData.password) {
-          // 自动解锁用，写入sessionStorage
-          sessionStorage.setItem('wallet_auto_unlock', walletData.password);
-          
-          // 设置定时器，确保在页面跳转后清除敏感数据
+          await unlock(walletData.password); // 强制解锁，确保wallets已加载
           setTimeout(() => {
-            window.location.href = '/dashboard';
-            // 页面跳转后清除敏感数据
+            navigate('/dashboard');
             setTimeout(() => {
-              sessionStorage.removeItem('wallet_auto_unlock');
-              // 清除内存中的敏感数据
               setWalletData(prev => ({
                 ...prev,
                 mnemonic: '',
                 password: '',
                 confirmPassword: ''
               }));
-              window.location.reload();
             }, 100);
-          }, 1500);
+          }, 500);
         }
       } catch (error) {
-        setFormError('解锁钱包失败，请重新登录');
-        // 确保出错时也清除敏感数据
-        sessionStorage.removeItem('wallet_auto_unlock');
+        setFormError('跳转失败，请手动进入钱包');
       }
     } else {
       setFormError('助记词验证失败，请检查您的选择');

@@ -12,7 +12,6 @@ import {
   DownOutlined,
   CalculatorOutlined
 } from '@ant-design/icons';
-import TransactionConfirmationModal from './TransactionConfirmationModal';
 
 /**
  * 发送交易模态框组件
@@ -33,7 +32,9 @@ const SendTransactionModal = ({
     sendTransaction, 
     sendTokenTransaction,
     tokens,
-    getTokenBalance
+    getTokenBalance,
+    networks,
+    currentNetwork
   } = useWallet();
   
   const [recipient, setRecipient] = useState('');
@@ -52,10 +53,6 @@ const SendTransactionModal = ({
   const [estimatingGas, setEstimatingGas] = useState(false); // Gas估算状态
   const [revertReason, setRevertReason] = useState(''); // 链上失败原因
   
-  // 添加交易确认相关状态
-  const [showConfirmation, setShowConfirmation] = useState(false);
-  const [confirmationData, setConfirmationData] = useState(null);
-
   // 获取当前钱包和余额
   const currentWallet = getCurrentWallet();
   const ethBalance = getCurrentWalletBalance();
@@ -78,8 +75,6 @@ const SendTransactionModal = ({
     setAddressValid(false);
     setShowAdvanced(false);
     setSelectedToken(null);
-    setShowConfirmation(false);
-    setConfirmationData(null);
     setIsSending(false);
     setEstimatingGas(false);
     setRevertReason('');
@@ -89,11 +84,6 @@ const SendTransactionModal = ({
   const handleClose = () => {
     resetForm();
     onClose();
-  };
-  
-  // 关闭确认模态框
-  const handleCloseConfirmation = () => {
-    setShowConfirmation(false);
   };
 
   // 验证地址
@@ -139,13 +129,44 @@ const SendTransactionModal = ({
         fee = await blockchainService.estimateTransactionGas(txObject);
       }
       
-      setEstimatedFee(fee.gasFee);
-      setGasPrice(ethers.utils.formatUnits(fee.gasPrice, 'gwei'));
-      setGasLimit(fee.gasLimit.toString());
+      // 增加20%的安全系数，以防止gas不足
+      const adjustedGasLimit = Math.ceil(Number(fee.gasLimit) * 1.2).toString();
       
-      // 显示成功提示
-      setError('Gas费用估算成功');
-      setTimeout(() => setError(''), 2000);
+      // 计算调整后的gas费用
+      const gasPriceGwei = ethers.utils.formatUnits(fee.gasPrice, 'gwei');
+      const adjustedGasFee = (parseFloat(fee.gasFee) * 1.2).toFixed(8);
+      
+      setEstimatedFee(adjustedGasFee);
+      setGasPrice(gasPriceGwei);
+      setGasLimit(adjustedGasLimit);
+      
+      // 检查余额是否足够支付交易费用
+      if (!selectedToken) {
+        const amountInEth = parseFloat(amount);
+        const gasFeeInEth = parseFloat(adjustedGasFee);
+        const totalCost = amountInEth + gasFeeInEth;
+        const ethBalanceValue = parseFloat(ethBalance);
+        
+        if (totalCost > ethBalanceValue) {
+          setError(`警告：余额不足以支付交易费用。总花费: ${totalCost.toFixed(6)} ETH (${amountInEth.toFixed(6)} ETH + ${gasFeeInEth.toFixed(6)} ETH gas), 可用余额: ${ethBalanceValue} ETH`);
+        } else {
+          // 显示成功提示
+          setError('Gas费用估算成功');
+          setTimeout(() => setError(''), 2000);
+        }
+      } else {
+        // 检查ETH余额是否足够支付gas费用
+        const gasFeeInEth = parseFloat(adjustedGasFee);
+        const ethBalanceValue = parseFloat(ethBalance);
+        
+        if (gasFeeInEth > ethBalanceValue) {
+          setError(`警告：ETH余额不足以支付gas费用。Gas费用: ${gasFeeInEth.toFixed(6)} ETH, 可用ETH余额: ${ethBalanceValue} ETH`);
+        } else {
+          // 显示成功提示
+          setError('Gas费用估算成功');
+          setTimeout(() => setError(''), 2000);
+        }
+      }
     } catch (err) {
       console.error('估算Gas费用失败:', err);
       setError(`估算Gas费用失败: ${err.message}`);
@@ -168,16 +189,37 @@ const SendTransactionModal = ({
     } else {
       // 对于ETH，保留一些用于Gas费用
       const maxEth = parseFloat(ethBalance);
-      if (maxEth > 0.01) {
-        setAmount((maxEth - 0.01).toFixed(6));
+      console.log('设置最大金额，当前余额:', maxEth, 'ETH');
+      
+      // 获取当前网络配置
+      const currentNetworkConfig = networks ? networks[currentNetwork] : null;
+      console.log('当前网络:', currentNetwork, currentNetworkConfig);
+      
+      // 根据不同网络预留不同数量的ETH
+      let reserveAmount = 0.01; // 默认预留0.01 ETH
+      
+      // 如果是本地网络或测试网络，预留更多
+      if (currentNetworkConfig && (currentNetworkConfig.chainId === 1337 || currentNetwork.includes('test'))) {
+        reserveAmount = 0.2; // 本地/测试网络预留0.2 ETH
+        console.log('本地/测试网络，预留更多ETH用于gas:', reserveAmount, 'ETH');
+      } else if (maxEth > 1) {
+        // 如果余额较大，预留更多
+        reserveAmount = 0.1; // 预留0.1 ETH
+      }
+      
+      if (maxEth > reserveAmount) {
+        const maxAmount = (maxEth - reserveAmount).toFixed(6);
+        console.log('设置最大可发送金额:', maxAmount, 'ETH (预留', reserveAmount, 'ETH用于gas)');
+        setAmount(maxAmount);
       } else {
+        console.log('余额不足以支付gas费用，设置为0');
         setAmount('0');
       }
     }
   };
 
-  // 准备交易确认
-  const handlePrepareTransaction = () => {
+  // 修改：直接发送交易，不再显示确认模态框
+  const handleSendTransaction = () => {
     if (!recipient || !amount || !addressValid) {
       setError('请填写有效的接收地址和金额');
       return;
@@ -190,61 +232,79 @@ const SendTransactionModal = ({
     
     // 检查余额是否足够
     const amountValue = parseFloat(amount);
-    const balanceValue = parseFloat(maxAvailable);
     
-    if (amountValue > balanceValue) {
-      setError('余额不足');
-      return;
+    // 对于代币转账，检查代币余额是否足够
+    if (selectedToken) {
+      const tokenBalanceValue = parseFloat(tokenBalance);
+      if (amountValue > tokenBalanceValue) {
+        setError(`${selectedToken.symbol}余额不足`);
+        return;
+      }
+      
+      // 检查ETH余额是否足够支付gas费用
+      const gasFeeInEth = parseFloat(estimatedFee || '0');
+      const ethBalanceValue = parseFloat(ethBalance);
+      
+      if (gasFeeInEth > ethBalanceValue) {
+        setError(`ETH余额不足以支付gas费用。Gas费用: ${gasFeeInEth.toFixed(6)} ETH, 可用ETH余额: ${ethBalanceValue} ETH`);
+        return;
+      }
+    } else {
+      // 对于ETH转账，检查余额是否足够支付交易金额加上gas费用
+      const gasFeeInEth = parseFloat(estimatedFee || '0');
+      const totalCost = amountValue + gasFeeInEth;
+      const ethBalanceValue = parseFloat(ethBalance);
+      
+      if (totalCost > ethBalanceValue) {
+        setError(`ETH余额不足以支付交易费用。总花费: ${totalCost.toFixed(6)} ETH (${amountValue.toFixed(6)} ETH + ${gasFeeInEth.toFixed(6)} ETH gas), 可用余额: ${ethBalanceValue} ETH`);
+        return;
+      }
     }
     
-    // 计算总金额（对于ETH转账，加上gas费；对于代币转账，仅显示代币数量）
-    let totalAmount = amount;
-    if (!selectedToken && estimatedFee) {
-      totalAmount = (parseFloat(amount) + parseFloat(estimatedFee)).toFixed(6);
-    }
-    
-    // 准备确认数据
-    setConfirmationData({
-      recipient,
-      amount,
-      gasPrice,
-      gasLimit,
-      estimatedFee,
-      networkSymbol: selectedToken ? selectedToken.symbol : 'ETH',
-      selectedToken,
-      totalAmount
-    });
-    
-    // 显示确认模态框
-    setShowConfirmation(true);
+    // 直接发送交易，不再显示确认模态框
+    handleSend();
   };
 
   // 处理发送交易
   const handleSend = async () => {
-    // 防抖：如果已经在发送中，则不重复发送
     if (isSending) return;
-    
-    // 新增gasLimit校验
-    if (gasLimit && parseInt(gasLimit, 10) < 21000) {
-      setError('Gas Limit 不能小于 21000');
-      setShowConfirmation(false);
-      return;
-    }
-    
-    setIsSending(true); // 设置发送中状态
+    setIsSending(true);
     setLoading(true);
     setError('');
+    setSuccess(false);
     setRevertReason('');
-    
     try {
+      console.log('======= 发送交易开始 =======');
+      // 检查当前钱包
+      if (!currentWallet || !currentWallet.address) {
+        setError('当前钱包不可用');
+        setLoading(false);
+        setIsSending(false);
+        return;
+      }
+      // 调试：打印当前 signer 地址
+      console.log('当前签名账户:', currentWallet.address);
+      console.log('发送到地址:', recipient);
+      console.log('发送金额:', amount);
+      
       // 准备交易选项
       const options = {};
-      if (gasPrice) options.gasPrice = gasPrice;
-      if (gasLimit) options.gasLimit = gasLimit;
+      if (gasPrice) {
+        options.gasPrice = gasPrice;
+        console.log('设置自定义gasPrice:', gasPrice, 'Gwei');
+      }
+      if (gasLimit) {
+        options.gasLimit = gasLimit;
+        console.log('设置自定义gasLimit:', gasLimit);
+      }
+      
+      console.log('交易选项:', options);
+      console.log('当前网络:', getCurrentWallet()?.network);
       
       let tx;
       if (selectedToken) {
         // 发送代币交易
+        console.log('发送代币交易:', selectedToken.symbol);
         tx = await sendTokenTransaction(
           selectedToken.address,
           recipient,
@@ -252,27 +312,42 @@ const SendTransactionModal = ({
           options
         );
       } else {
-        // 发送ETH交易
+        // 发送ETH交易，确保使用当前钱包
+        console.log('发送ETH交易');
         tx = await sendTransaction(recipient, amount, options);
       }
       
+      console.log('交易响应:', tx);
+      
       if (tx) {
+        console.log('交易已提交:', tx.hash);
         setSuccess(true);
         if (onSuccess) onSuccess(tx);
-        
-        // 3秒后关闭模态框
         setTimeout(() => {
-          handleClose();
-        }, 3000);
+          handleClose(); // 交易发起后自动关闭主弹窗
+        }, 1500);
       }
     } catch (err) {
       console.error('发送交易失败:', err);
-      setError(`发送交易失败: ${err.message}`);
       
-      // 尝试解析链上失败原因
+      // 尝试解析错误
+      let errorMessage = err.message;
+      if (err.error && err.error.body) {
+        try {
+          const errorBody = JSON.parse(err.error.body);
+          console.error('RPC错误详情:', errorBody);
+          if (errorBody.error && errorBody.error.message) {
+            errorMessage = `${err.message} (${errorBody.error.message})`;
+          }
+        } catch (parseError) {
+          console.error('无法解析错误体:', err.error.body);
+        }
+      }
+      
+      setError(`发送交易失败: ${errorMessage}`);
+      
       if (err.data) {
         try {
-          // 尝试解析revert reason
           const reason = ethersHelper.parseRevertReason(err.data);
           if (reason) {
             setRevertReason(`链上失败原因: ${reason}`);
@@ -283,10 +358,8 @@ const SendTransactionModal = ({
       }
     } finally {
       setLoading(false);
-      // 延迟重置发送状态，避免用户快速点击
-      setTimeout(() => {
-        setIsSending(false);
-      }, 2000);
+      console.log('======= 发送交易结束 =======');
+      setIsSending(false);
     }
   };
   
@@ -413,6 +486,7 @@ const SendTransactionModal = ({
                   placeholder="输入有效的以太坊地址"
                   value={recipient}
                   onChange={(e) => setRecipient(e.target.value)}
+                  disabled={loading || isSending}
                 />
               </div>
               
@@ -426,6 +500,7 @@ const SendTransactionModal = ({
                     type="button"
                     className="text-xs text-blue-600 hover:text-blue-800"
                     onClick={handleMaxAmount}
+                    disabled={loading || isSending}
                   >
                     最大
                   </button>
@@ -437,6 +512,7 @@ const SendTransactionModal = ({
                     placeholder="0.0"
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
+                    disabled={loading || isSending}
                   />
                   <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
                     <span className="text-gray-500">
@@ -468,7 +544,7 @@ const SendTransactionModal = ({
                     type="button"
                     className="text-xs bg-blue-50 text-blue-600 py-1 px-2 rounded flex items-center"
                     onClick={estimateGas}
-                    disabled={estimatingGas || !addressValid || !amount}
+                    disabled={estimatingGas || !addressValid || !amount || loading || isSending}
                   >
                     {estimatingGas ? <LoadingOutlined className="mr-1" /> : <CalculatorOutlined className="mr-1" />}
                     自动估算Gas
@@ -487,6 +563,7 @@ const SendTransactionModal = ({
                         placeholder="自动"
                         value={gasPrice}
                         onChange={(e) => setGasPrice(e.target.value)}
+                        disabled={loading || isSending}
                       />
                     </div>
                     
@@ -500,6 +577,7 @@ const SendTransactionModal = ({
                         placeholder="21000"
                         value={gasLimit}
                         onChange={(e) => setGasLimit(e.target.value)}
+                        disabled={loading || isSending}
                       />
                     </div>
                     
@@ -530,7 +608,7 @@ const SendTransactionModal = ({
               {success && (
                 <div className="bg-green-50 border border-green-100 text-green-600 p-3 rounded-md flex items-start space-x-2">
                   <CheckCircleOutlined className="flex-shrink-0 mt-0.5" />
-                  <span className="text-sm">交易已提交到网络，请等待确认</span>
+                  <span className="text-sm">交易已提交到网络，请在交易历史中查看详情</span>
                 </div>
               )}
               
@@ -543,7 +621,7 @@ const SendTransactionModal = ({
                       ? 'bg-blue-400 cursor-not-allowed' 
                       : 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2'
                   }`}
-                  onClick={handlePrepareTransaction}
+                  onClick={handleSendTransaction}
                   disabled={loading || !addressValid || !amount || isSending}
                 >
                   {loading ? (
@@ -551,24 +629,13 @@ const SendTransactionModal = ({
                       <LoadingOutlined className="mr-2" /> 处理中...
                     </span>
                   ) : (
-                    '下一步'
+                    '发送'
                   )}
                 </button>
               </div>
             </div>
           </div>
         </div>
-      )}
-      
-      {/* 交易确认模态框 */}
-      {showConfirmation && confirmationData && (
-        <TransactionConfirmationModal
-          visible={showConfirmation}
-          onClose={handleCloseConfirmation}
-          onConfirm={handleSend}
-          data={confirmationData}
-          loading={loading || isSending}
-        />
       )}
     </>
   );

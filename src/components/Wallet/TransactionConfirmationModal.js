@@ -17,15 +17,18 @@ import { ethers } from 'ethers';
  * @param {Function} onClose - 关闭回调
  * @param {Function} onConfirm - 确认回调
  * @param {object} transactionData - 交易数据
+ * @param {boolean} loading - 加载状态
+ * @param {boolean} isSending - 发送状态
  * @returns {JSX.Element}
  */
 const TransactionConfirmationModal = ({ 
   visible = false, 
   onClose,
   onConfirm,
-  transactionData
+  transactionData,
+  loading = false,
+  isSending = false
 }) => {
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   
   if (!visible || !transactionData) return null;
@@ -38,13 +41,13 @@ const TransactionConfirmationModal = ({
     estimatedFee, 
     networkSymbol = 'ETH',
     selectedToken,
-    totalAmount
+    totalAmount,
+    totalEthCost
   } = transactionData;
 
   // 处理确认交易
   const handleConfirm = async () => {
     try {
-      setLoading(true);
       setError('');
       
       // 调用父组件的确认回调
@@ -52,8 +55,6 @@ const TransactionConfirmationModal = ({
     } catch (err) {
       console.error('交易确认失败:', err);
       setError(`确认失败: ${err.message}`);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -118,7 +119,7 @@ const TransactionConfirmationModal = ({
           <div className="flex justify-between px-2 py-3 bg-white border border-gray-200 rounded-lg items-center">
             <span className="text-gray-700">网络费用</span>
             <span className="font-medium text-gray-700">
-              {estimatedFee} {networkSymbol}
+              {estimatedFee} ETH
             </span>
           </div>
           
@@ -129,11 +130,50 @@ const TransactionConfirmationModal = ({
             </span>
           </div>
 
-          <div className="flex justify-between px-2 py-3 bg-primary-50 border border-primary-100 rounded-lg items-center">
-            <span className="text-gray-700 font-medium">总金额</span>
-            <span className="font-bold text-primary-700">
-              {totalAmount} {networkSymbol}
-            </span>
+          {selectedToken ? (
+            <>
+              <div className="flex justify-between px-2 py-3 bg-primary-50 border border-primary-100 rounded-lg items-center">
+                <span className="text-gray-700 font-medium">代币数量</span>
+                <span className="font-bold text-primary-700">
+                  {amount} {selectedToken.symbol}
+                </span>
+              </div>
+              <div className="flex justify-between px-2 py-3 bg-primary-50 border border-primary-100 rounded-lg items-center">
+                <span className="text-gray-700 font-medium">ETH花费(仅Gas)</span>
+                <span className="font-bold text-primary-700">
+                  {estimatedFee} ETH
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="flex justify-between px-2 py-3 bg-primary-50 border border-primary-100 rounded-lg items-center">
+              <span className="text-gray-700 font-medium">总ETH花费</span>
+              <span className="font-bold text-primary-700">
+                {totalAmount} ETH
+              </span>
+            </div>
+          )}
+          
+          {/* 添加详细明细 */}
+          <div className="mt-2 p-3 bg-gray-50 rounded-lg">
+            <div className="flex items-start">
+              <InfoCircleOutlined className="text-blue-500 text-lg mr-2 mt-0.5" />
+              <div className="text-sm text-gray-700">
+                <p className="font-medium mb-1">详细明细:</p>
+                {selectedToken ? (
+                  <>
+                    <p>• 代币转账: {amount} {selectedToken.symbol}</p>
+                    <p>• Gas费用: {estimatedFee} ETH</p>
+                  </>
+                ) : (
+                  <>
+                    <p>• 转账金额: {amount} ETH</p>
+                    <p>• Gas费用: {estimatedFee} ETH</p>
+                    <p>• 总花费: {totalAmount} ETH</p>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -158,11 +198,10 @@ const TransactionConfirmationModal = ({
           <button
             type="button"
             onClick={handleConfirm}
-            disabled={loading}
+            disabled={loading || isSending}
             className="px-4 py-2 rounded-lg bg-primary-600 hover:bg-primary-700 text-white disabled:opacity-50 flex items-center"
           >
-            {loading && <LoadingOutlined className="mr-2" />}
-            确认交易
+            {loading || isSending ? <LoadingOutlined className="mr-2" /> : '确认'}
           </button>
         </div>
       </div>
@@ -174,6 +213,8 @@ TransactionConfirmationModal.propTypes = {
   visible: PropTypes.bool,
   onClose: PropTypes.func.isRequired,
   onConfirm: PropTypes.func.isRequired,
+  loading: PropTypes.bool,
+  isSending: PropTypes.bool,
   transactionData: PropTypes.shape({
     recipient: PropTypes.string,
     amount: PropTypes.string,
@@ -182,7 +223,8 @@ TransactionConfirmationModal.propTypes = {
     estimatedFee: PropTypes.string,
     networkSymbol: PropTypes.string,
     selectedToken: PropTypes.object,
-    totalAmount: PropTypes.string
+    totalAmount: PropTypes.string,
+    totalEthCost: PropTypes.string
   })
 };
 
